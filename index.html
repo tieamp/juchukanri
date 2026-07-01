@@ -194,7 +194,7 @@
 
   <div id="results" style="display:none;">
     <div class="note-box">
-      ⚠ このCSVには「入金ステータス」の専用列がないため、決済方法（コンビニ決済・あと払い・銀行振込など）から「未入金の可能性」を自動推定しています。実際は入金済みのケースも含まれる可能性があるので、「全注文明細」タブの「入金確認OK」ボタンで手動修正できます。キャンセルは「発送状況」列の記載から判定しています。
+      ⚠ 未入金の自動判定は現在オフになっています（決済方法だけでは根拠が不十分なため）。CSVに「入金ステータス」の専用列がある場合はそちらの記載を使って判定します。キャンセルは「発送状況」列の記載から判定しています。
     </div>
     <div class="cards" id="summaryCards"></div>
 
@@ -227,7 +227,12 @@ const errBox = document.getElementById('errBox');
 // 入金ステータス column exists in the CSV. This is a heuristic based on
 // payment-method type only — it can be wrong (e.g. a konbini order that has
 // since been paid). Use the manual "入金確認OK" toggle in 全注文明細 to correct it.
-const UNPAID_METHOD_HINTS = ['コンビニ', 'あと払い', '後払い', '銀行振込', 'Pay-easy'];
+// Automatic "unpaid" detection based on payment-method name has been disabled
+// (2026-07) because it was judged an insufficient basis — a payment method
+// like "konbini" or "pay-later" does not reliably indicate the order is still
+// unpaid. Detection now only activates if the CSV has an explicit payment
+// status column (its value containing "未"). Otherwise no order is flagged.
+const UNPAID_METHOD_HINTS = [];
 
 fileInput.addEventListener('change', () => {
   const f = fileInput.files[0];
@@ -474,7 +479,7 @@ function render() {
     <div class="card"><div class="label">注文件数</div><div class="value">${totalOrders}</div></div>
     <div class="card c-pink"><div class="label">商品種類数</div><div class="value">${productSet.size}</div></div>
     <div class="card c-gold"><div class="label">総購入枚数（数量合計）</div><div class="value">${totalQty}</div></div>
-    <div class="card warn"><div class="label">⚠ 未入金の可能性あり</div><div class="value">${unpaidOrders}件</div></div>
+    ${unpaidOrders > 0 ? `<div class="card warn"><div class="label">⚠ 未入金の可能性あり</div><div class="value">${unpaidOrders}件</div></div>` : ''}
     <div class="card cancel"><div class="label">🚫 キャンセル</div><div class="value">${cancelledOrders}件</div></div>
   `;
 
@@ -984,8 +989,9 @@ function applyAllFilter() {
     if (o.cancelled) statusHtml = '<span class="badge cancelled">キャンセル</span>';
     else if (o.manualPaid === true) statusHtml = '<span class="badge paid-manual">入金確認済み(手動)</span>';
     else if (unpaid) statusHtml = '<span class="badge unpaid-strong">未入金?</span>';
-    else statusHtml = '支払い方法から判定：問題なし';
-    const btn = o.cancelled ? '' : `<button class="mini-btn ${o.manualPaid === true ? 'active-paid' : ''}" onclick="toggleManualPaid('${o.oid}')">${o.manualPaid === true ? '確認を取り消す' : '入金確認OK'}</button>`;
+    else statusHtml = '－';
+    const showConfirmBtn = !o.cancelled && (o.heuristicUnpaid || o.manualPaid === true);
+    const btn = showConfirmBtn ? `<button class="mini-btn ${o.manualPaid === true ? 'active-paid' : ''}" onclick="toggleManualPaid('${o.oid}')">${o.manualPaid === true ? '確認を取り消す' : '入金確認OK'}</button>` : '';
     const rowClass = o.cancelled ? 'cancelled' : (unpaid ? 'unpaid' : '');
     return `<tr class="${rowClass}">
       <td>${escapeHtml(i.oid)}</td><td>${escapeHtml(o.date)}</td><td>${escapeHtml(o.billName)}</td>
