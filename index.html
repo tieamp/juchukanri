@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>受注管理ボード</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root{
+    --paper:#FAF6EE; --card:#FFFFFF; --ink:#2A2420; --ink-soft:#6E6459; --line:#E7DECB;
+    --pink:#E85D75; --pink-deep:#C43F58; --teal:#2F8F87; --gold:#D9A441;
+    --warn-bg:#FFF3DE; --warn-line:#E8B554; --warn-text:#8A5A11;
+    --cancel-bg:#EAE7DF; --cancel-text:#7A7468;
+    --shadow: 0 1px 2px rgba(42,36,32,0.06), 0 8px 24px rgba(42,36,32,0.06);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 8% 0%, rgba(232,93,117,0.08), transparent 40%),
+      radial-gradient(circle at 95% 10%, rgba(47,143,135,0.08), transparent 45%),
+      var(--paper);
+    color:var(--ink); font-family:'Noto Sans JP', sans-serif; padding: 28px 20px 80px; line-height:1.6;
+  }
+  .wrap{max-width:1180px; margin:0 auto;}
+
+  .hero{display:flex; align-items:flex-end; gap:18px; margin-bottom:26px; flex-wrap:wrap;}
+  .cheki-mark{
+    width:58px; height:70px; background:#fff; border-radius:4px; box-shadow: var(--shadow);
+    transform: rotate(-6deg); position:relative; flex:none; border-bottom:14px solid var(--pink);
+  }
+  .cheki-mark::after{
+    content:""; position:absolute; top:8px; left:8px; right:8px; bottom:22px;
+    background: linear-gradient(135deg, #fbe2e7, #eaf3f1); border-radius:2px;
+  }
+  .hero h1{font-family:'Zen Maru Gothic', sans-serif; font-weight:900; font-size:28px; margin:0 0 4px; letter-spacing:0.02em;}
+  .hero p{margin:0; color:var(--ink-soft); font-size:13.5px;}
+
+  .panel{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; box-shadow: var(--shadow); margin-bottom:22px;}
+  .panel h2{font-family:'Zen Maru Gothic', sans-serif; font-size:16px; margin:0 0 14px; display:flex; align-items:center; gap:8px;}
+  .panel h2 .num{
+    display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%;
+    background:var(--pink); color:#fff; font-size:12px; font-weight:700; font-family:'JetBrains Mono', monospace;
+  }
+  .input-row{display:flex; gap:12px; flex-wrap:wrap; align-items:center;}
+  .file-btn{
+    display:inline-flex; align-items:center; gap:8px; background:var(--ink); color:#fff; border:none;
+    padding:11px 20px; border-radius:8px; font-size:14px; cursor:pointer; font-family:'Noto Sans JP', sans-serif; font-weight:700;
+  }
+  .file-btn:hover{background:#453d35;}
+  input[type=file]{display:none;}
+  select{padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-size:13px; background:#fff; color:var(--ink);}
+  .file-name{font-size:12.5px; color:var(--ink-soft);}
+  .err{color:var(--pink-deep); font-size:13px; margin-top:10px; display:none;}
+  .hint{font-size:12px; color:var(--ink-soft); margin-top:10px;}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:24px;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; box-shadow: var(--shadow); border-bottom:4px solid var(--teal);}
+  .card.c-pink{border-bottom-color:var(--pink);}
+  .card.c-gold{border-bottom-color:var(--gold);}
+  .card.warn{border-bottom-color:#D9534F; background:var(--warn-bg);}
+  .card.warn .value{color:#B23A2F;}
+  .card.cancel{border-bottom-color:#8B8677; background:#F1EFE8;}
+  .card.cancel .value{color:var(--cancel-text);}
+  .card .label{font-size:11.5px; color:var(--ink-soft); margin-bottom:4px;}
+  .card .value{font-family:'JetBrains Mono', monospace; font-size:24px; font-weight:700;}
+
+  .tabs{display:flex; gap:6px; margin-bottom:16px; border-bottom:1px solid var(--line); flex-wrap:wrap;}
+  .tab-btn{
+    background:none; border:none; padding:10px 14px; font-size:13px; font-family:'Zen Maru Gothic', sans-serif;
+    font-weight:700; color:var(--ink-soft); cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-1px;
+  }
+  .tab-btn.active{color:var(--pink-deep); border-bottom-color:var(--pink);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+
+  .note-box{
+    background:#EFF6F5; border:1px solid #C8E2DF; border-radius:10px; padding:10px 14px;
+    font-size:12px; color:#2A5652; margin-bottom:14px;
+  }
+
+  .product-block{background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden; box-shadow: var(--shadow);}
+  .product-head{display:flex; justify-content:space-between; align-items:center; padding:14px 18px; cursor:pointer; background:#FFFCF6;}
+  .product-head:hover{background:#FBF3E8;}
+  .product-title{font-family:'Zen Maru Gothic', sans-serif; font-weight:700; font-size:14.5px;}
+  .product-total{font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--pink-deep); font-size:14px;}
+  .product-body{padding:0 18px 16px; display:none;}
+  .product-body.open{display:block;}
+  .member-row{display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px dashed var(--line); font-size:13px;}
+  .member-row:first-child{border-top:none;}
+  .member-name{font-weight:500;}
+  .member-count{font-family:'JetBrains Mono', monospace; color:var(--teal); font-weight:700;}
+  .nick-toggle{font-size:11.5px; color:var(--ink-soft); cursor:pointer; text-decoration:underline; margin-left:8px;}
+  .nick-detail{display:none; margin:4px 0 10px; padding:8px 12px; background:#FAF6EE; border-radius:8px; font-size:12px;}
+  .nick-detail.open{display:block;}
+  .nick-detail div{padding:2px 0;}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  thead th{background:var(--ink); color:#fff; text-align:left; padding:8px 10px; font-weight:500; position:sticky; top:0; white-space:nowrap;}
+  tbody td{padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
+  tbody tr:nth-child(even){background:#FBF8F1;}
+  tbody tr.unpaid{background:var(--warn-bg) !important;}
+  tbody tr.cancelled{background:var(--cancel-bg) !important; color:var(--cancel-text);}
+  tbody tr.cancelled td{text-decoration:line-through;}
+  .table-scroll{max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:10px;}
+
+  .toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;}
+  .search-box{flex:1; min-width:180px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px;}
+  .dl-btn{background:var(--teal); color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:12.5px; cursor:pointer; font-family:'Noto Sans JP', sans-serif;}
+  .dl-btn:hover{background:#256e68;}
+  .dl-btn.secondary{background:var(--ink);}
+  .dl-btn.secondary:hover{background:#453d35;}
+  .dl-btn.pdf{background:var(--pink-deep);}
+  .dl-btn.pdf:hover{background:#a5334a;}
+  .badge{display:inline-block; font-size:10.5px; padding:2px 7px; border-radius:20px; background:#FBE2E7; color:var(--pink-deep); font-weight:700; margin-left:6px; white-space:nowrap;}
+  .badge.unpaid{background:#F9D9C7; color:#B23A2F;}
+  .badge.unpaid-strong{background:#E8564A; color:#fff;}
+  .badge.cancelled{background:#DAD5C8; color:var(--cancel-text);}
+  .badge.paid-manual{background:#DCEEE9; color:#1F6B5C;}
+  .badge.dup{background:#FDE68A; color:#7C4A03;}
+  .empty-note{color:var(--ink-soft); font-size:13px; padding:20px; text-align:center;}
+  .checkline{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft);}
+  .mini-btn{
+    font-size:11px; padding:3px 9px; border-radius:6px; border:1px solid var(--line); background:#fff;
+    cursor:pointer; color:var(--ink-soft); white-space:nowrap;
+  }
+  .mini-btn:hover{background:#F3EEE3;}
+  .mini-btn.active-paid{background:#DCEEE9; border-color:#9FCFC2; color:#1F6B5C;}
+
+  .view-toggle{display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+  .view-toggle button{
+    border:none; background:#fff; padding:8px 14px; font-size:12.5px; cursor:pointer;
+    font-family:'Zen Maru Gothic', sans-serif; font-weight:700; color:var(--ink-soft);
+  }
+  .view-toggle button + button{border-left:1px solid var(--line);}
+  .view-toggle button.active{background:var(--pink); color:#fff;}
+
+  .prod-line{margin-bottom:6px; line-height:1.5;}
+  .prod-line:last-child{margin-bottom:0;}
+  .prod-chip{
+    display:inline-block; background:#EFEAE0; color:var(--ink-soft); font-size:10.5px; font-weight:700;
+    padding:2px 7px; border-radius:5px; margin-right:6px; white-space:nowrap;
+  }
+
+  select.member-select{font-size:14px; padding:9px 12px; font-family:'Zen Maru Gothic', sans-serif; font-weight:700; color:var(--ink); border:1px solid var(--line); border-radius:8px;}
+  .share-title{font-family:'Zen Maru Gothic', sans-serif; font-size:17px; font-weight:900; margin:4px 0 14px; color:var(--pink-deep);}
+
+  .copy-fallback{display:none; margin-top:10px;}
+  .copy-fallback textarea{width:100%; min-height:90px; font-family:'JetBrains Mono', monospace; font-size:11.5px; padding:8px; border:1px solid var(--line); border-radius:8px;}
+  .copy-fallback p{font-size:11.5px; color:var(--ink-soft); margin:0 0 6px;}
+
+  #printArea{display:none;}
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{display:block; position:absolute; top:0; left:0; width:100%; padding:20px;}
+    #printArea h2{font-family:'Zen Maru Gothic', sans-serif; font-size:20px; margin-bottom:4px;}
+    #printArea .meta{font-size:11px; color:#555; margin-bottom:14px;}
+    #printArea table{width:100%; border-collapse:collapse; font-size:12px;}
+    #printArea th, #printArea td{border:1px solid #999; padding:6px 8px; text-align:left;}
+    #printArea th{background:#eee;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div class="cheki-mark"></div>
+    <div>
+      <h1>受注管理ボード</h1>
+      <p>BASEの注文CSVを読み込むだけで、ニックネーム紐付け・未入金/キャンセルチェック・メンバー共有リスト・発送まとめまで自動作成します</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="num">1</span>CSVファイルを読み込む</h2>
+    <div class="input-row">
+      <label class="file-btn">
+        📂 CSVファイルを選択
+        <input type="file" id="fileInput" accept=".csv">
+      </label>
+      <select id="encodingSelect">
+        <option value="shift_jis">Shift-JIS（BASE標準）</option>
+        <option value="utf-8">UTF-8</option>
+      </select>
+      <span class="file-name" id="fileName">未選択</span>
+    </div>
+    <div class="hint">BASEの「注文管理」からダウンロードしたCSVをそのまま選択してください。</div>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <div id="results" style="display:none;">
+    <div class="note-box">
+      ⚠ このCSVには「入金ステータス」の専用列がないため、決済方法（コンビニ決済・あと払い・銀行振込など）から「未入金の可能性」を自動推定しています。実際は入金済みのケースも含まれる可能性があるので、「全注文明細」タブの「入金確認OK」ボタンで手動修正できます。キャンセルは「発送状況」列の記載から判定しています。
+    </div>
+    <div class="cards" id="summaryCards"></div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="nickname">ニックネーム記入商品</button>
+      <button class="tab-btn" data-tab="normal">通常商品</button>
+      <button class="tab-btn" data-tab="share">メンバー別共有リスト</button>
+      <button class="tab-btn" data-tab="shipping">購入者別 発送まとめ</button>
+      <button class="tab-btn" data-tab="all">全注文明細</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-nickname"></div>
+    <div class="tab-panel" id="tab-normal"></div>
+    <div class="tab-panel" id="tab-share"></div>
+    <div class="tab-panel" id="tab-shipping"></div>
+    <div class="tab-panel" id="tab-all"></div>
+  </div>
+
+</div>
+
+<div id="printArea"><h2 id="printTitle"></h2><div class="meta" id="printMeta"></div><div id="printBody"></div></div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const fileNameEl = document.getElementById('fileName');
+const encodingSelect = document.getElementById('encodingSelect');
+const errBox = document.getElementById('errBox');
+
+// Payment methods treated as "payment not yet confirmed" when no explicit
+// 入金ステータス column exists in the CSV. This is a heuristic based on
+// payment-method type only — it can be wrong (e.g. a konbini order that has
+// since been paid). Use the manual "入金確認OK" toggle in 全注文明細 to correct it.
+const UNPAID_METHOD_HINTS = ['コンビニ', 'あと払い', '後払い', '銀行振込', 'Pay-easy'];
+
+fileInput.addEventListener('change', () => {
+  const f = fileInput.files[0];
+  if (!f) return;
+  fileNameEl.textContent = f.name;
+  errBox.style.display = 'none';
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const decoder = new TextDecoder(encodingSelect.value);
+      const text = decoder.decode(e.target.result);
+      parseAndRender(text);
+    } catch (err) {
+      errBox.style.display = 'block';
+      errBox.textContent = '文字コードの読み込みに失敗しました。エンコードを変えて再度お試しください。';
+    }
+  };
+  reader.readAsArrayBuffer(f);
+});
+encodingSelect.addEventListener('change', () => { if (fileInput.files[0]) fileInput.dispatchEvent(new Event('change')); });
+
+function findCol(headerRow, candidates) {
+  for (const cand of candidates) {
+    const hit = headerRow.find(h => h && h.includes(cand));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function formatDateTime(s) {
+  if (!s) return '';
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return s;
+  return `${parseInt(m[2], 10)}/${parseInt(m[3], 10)} ${m[4]}:${m[5]}`;
+}
+
+const MEMBER_COLORS = {
+  '天羽さら': '#8E44AD',
+  '葵まお': '#2E7DD7',
+  '一ノ瀬りの': '#2E9E4F',
+  '橘ゆきの': '#E08A2B',
+  '星月れみな': '#B8960C',
+  '彩恋なな': '#D64545',
+};
+function memberColorSpan(name) {
+  const c = MEMBER_COLORS[name];
+  return c ? `<span style="color:${c}; font-weight:700;">${escapeHtml(name)}</span>` : escapeHtml(name);
+}
+
+// Groups a purchaser's members Map (key "product｜member" -> qty) by product,
+// so the product name is shown once per product instead of repeated per line.
+function groupBreakdownByProduct(membersMap) {
+  const byProduct = new Map();
+  for (const [k, v] of membersMap) {
+    const [product, member] = k.split('｜');
+    if (!byProduct.has(product)) byProduct.set(product, []);
+    byProduct.get(product).push({ member, qty: v });
+  }
+  return byProduct;
+}
+
+function breakdownHtml(membersMap) {
+  const byProduct = groupBreakdownByProduct(membersMap);
+  return [...byProduct.entries()].map(([product, members]) => {
+    const memberStr = members.map(m => `${memberColorSpan(m.member)}×${m.qty}`).join('、');
+    return `<div class="prod-line"><span class="prod-chip">${escapeHtml(product)}</span>${memberStr}</div>`;
+  }).join('');
+}
+
+function breakdownText(membersMap) {
+  const byProduct = groupBreakdownByProduct(membersMap);
+  return [...byProduct.entries()].map(([product, members]) => {
+    const memberStr = members.map(m => `${m.member}×${m.qty}`).join('、');
+    return `${product}：${memberStr}`;
+  }).join(' / ');
+}
+
+let ORDERS = new Map();   // oid -> order meta
+let ITEMS = [];           // line items referencing oid
+
+function effectiveUnpaid(o) {
+  if (o.manualPaid === true) return false;
+  return o.heuristicUnpaid;
+}
+
+function parseAndRender(raw) {
+  const parsed = Papa.parse(raw.trim(), { header: true, skipEmptyLines: true });
+  if (!parsed.data.length) {
+    errBox.style.display = 'block';
+    errBox.textContent = 'CSVを読み取れませんでした。内容を確認してください。';
+    return;
+  }
+  const headerRow = parsed.meta.fields;
+  const col = {
+    orderId: findCol(headerRow, ['注文ID']),
+    date: findCol(headerRow, ['注文日時']),
+    billLast: findCol(headerRow, ['氏(請求先)', '氏（請求先）']),
+    billFirst: findCol(headerRow, ['名(請求先)', '名（請求先）']),
+    email: findCol(headerRow, ['メールアドレス']),
+    shipLast: findCol(headerRow, ['氏(配送先)', '氏（配送先）']),
+    shipFirst: findCol(headerRow, ['名(配送先)', '名（配送先）']),
+    zip: findCol(headerRow, ['郵便番号(配送先)', '郵便番号（配送先）']),
+    pref: findCol(headerRow, ['都道府県(配送先)', '都道府県（配送先）']),
+    addr1: findCol(headerRow, ['住所(配送先)', '住所（配送先）']),
+    addr2: findCol(headerRow, ['住所2(配送先)', '住所2（配送先）']),
+    phone: findCol(headerRow, ['電話番号(配送先)', '電話番号（配送先）']),
+    product: findCol(headerRow, ['商品名']),
+    variation: findCol(headerRow, ['バリエーション']),
+    qty: findCol(headerRow, ['数量']),
+    amount: findCol(headerRow, ['合計金額']),
+    payMethod: findCol(headerRow, ['支払い方法']),
+    payStatus: findCol(headerRow, ['入金']),
+    shipStatus: findCol(headerRow, ['発送状況']),
+    orderStatus: findCol(headerRow, ['注文ステータス']),
+  };
+  if (!col.orderId || !col.product) {
+    errBox.style.display = 'block';
+    errBox.textContent = 'CSVの列構成が想定と異なります（注文ID・商品名列が見つかりません）。BASEの注文リストCSVか確認してください。';
+    return;
+  }
+
+  const orderMap = new Map();
+  for (const row of parsed.data) {
+    const oid = row[col.orderId];
+    if (!oid) continue;
+    if (!orderMap.has(oid)) orderMap.set(oid, []);
+    orderMap.get(oid).push(row);
+  }
+
+  // preserve any manual paid-confirmations the user already made this session
+  const prevManual = new Map();
+  for (const [oid, o] of ORDERS) if (o.manualPaid !== null) prevManual.set(oid, o.manualPaid);
+
+  ORDERS = new Map();
+  ITEMS = [];
+
+  for (const [oid, rows] of orderMap) {
+    const first = rows[0];
+    const billName = (first[col.billLast] || '') + (first[col.billFirst] || '');
+    const shipName = col.shipLast ? ((first[col.shipLast] || '') + (first[col.shipFirst] || '')) : billName;
+    const email = col.email ? (first[col.email] || '') : '';
+    const date = col.date ? (first[col.date] || '') : '';
+    const payMethod = col.payMethod ? (first[col.payMethod] || '') : '';
+    let heuristicUnpaid = false;
+    if (col.payStatus) {
+      heuristicUnpaid = (first[col.payStatus] || '').includes('未');
+    } else {
+      heuristicUnpaid = UNPAID_METHOD_HINTS.some(h => payMethod.includes(h));
+    }
+    const cancelled =
+      (col.shipStatus && (first[col.shipStatus] || '').includes('キャンセル')) ||
+      (col.orderStatus && (first[col.orderStatus] || '').includes('キャンセル')) || false;
+    let amountSum = 0;
+    for (const r of rows) amountSum += parseInt(r[col.amount], 10) || 0;
+
+    ORDERS.set(oid, {
+      oid, date, billName, shipName, email,
+      zip: col.zip ? (first[col.zip] || '') : '',
+      pref: col.pref ? (first[col.pref] || '') : '',
+      addr1: col.addr1 ? (first[col.addr1] || '') : '',
+      addr2: col.addr2 ? (first[col.addr2] || '') : '',
+      phone: col.phone ? (first[col.phone] || '') : '',
+      payMethod, heuristicUnpaid, cancelled, amountSum,
+      manualPaid: prevManual.has(oid) ? prevManual.get(oid) : null,
+    });
+
+    let pending = null;
+    const flush = () => { if (pending) { ITEMS.push(pending); pending = null; } };
+
+    for (const row of rows) {
+      const prod = (row[col.product] || '').trim();
+      const variation = (row[col.variation] || '').trim();
+      const qty = parseInt(row[col.qty], 10) || 0;
+      if (!prod) continue;
+      if (prod.includes('クーポン')) continue; // coupon usage lines are not products
+
+      if (prod.includes('ニックネーム')) {
+        if (pending) { pending.nickname = variation; flush(); }
+      } else {
+        flush();
+        const m = variation.match(/^(.*?)[【\[]/);
+        pending = {
+          oid, product: prod, variation,
+          member: m ? m[1].trim() : (variation || '(メンバー指定なし)'),
+          qty, nickname: null,
+        };
+      }
+    }
+    flush();
+  }
+
+  render();
+}
+
+function orderOf(item) { return ORDERS.get(item.oid); }
+
+function toggleManualPaid(oid) {
+  const o = ORDERS.get(oid);
+  if (!o) return;
+  o.manualPaid = o.manualPaid === true ? null : true;
+  render();
+}
+
+let DUPLICATE_NICKNAMES = new Set();
+
+function computeDuplicateNicknames() {
+  const map = new Map();
+  for (const i of ITEMS) {
+    if (!i.nickname) continue;
+    const o = orderOf(i);
+    if (!map.has(i.nickname)) map.set(i.nickname, new Set());
+    map.get(i.nickname).add(o.billName);
+  }
+  const dup = new Set();
+  for (const [nick, names] of map) if (names.size > 1) dup.add(nick);
+  return dup;
+}
+
+function dupBadge(nickname) {
+  return DUPLICATE_NICKNAMES.has(nickname) ? ' <span class="badge dup" title="このニックネームは別の購入者も使用しています">⚠同名の別購入者あり</span>' : '';
+}
+
+function nicknamesHtml(nickSet) {
+  return [...nickSet].map(n => escapeHtml(n) + dupBadge(n)).join('、');
+}
+
+function nicknamesText(nickSet) {
+  return [...nickSet].map(n => DUPLICATE_NICKNAMES.has(n) ? `${n}(要確認:同名の別購入者あり)` : n).join('、');
+}
+
+function render() {
+  document.getElementById('results').style.display = 'block';
+  DUPLICATE_NICKNAMES = computeDuplicateNicknames();
+
+  const totalOrders = ORDERS.size;
+  const productSet = new Set(ITEMS.map(i => i.product));
+  const nicknameItems = ITEMS.filter(i => i.nickname !== null);
+  const nicknameProductSet = new Set(nicknameItems.map(i => i.product));
+  const totalQty = ITEMS.reduce((s, i) => s + i.qty, 0);
+  const unpaidOrders = [...ORDERS.values()].filter(o => effectiveUnpaid(o)).length;
+  const cancelledOrders = [...ORDERS.values()].filter(o => o.cancelled).length;
+
+  document.getElementById('summaryCards').innerHTML = `
+    <div class="card"><div class="label">注文件数</div><div class="value">${totalOrders}</div></div>
+    <div class="card c-pink"><div class="label">商品種類数</div><div class="value">${productSet.size}</div></div>
+    <div class="card c-gold"><div class="label">総購入枚数（数量合計）</div><div class="value">${totalQty}</div></div>
+    <div class="card warn"><div class="label">⚠ 未入金の可能性あり</div><div class="value">${unpaidOrders}件</div></div>
+    <div class="card cancel"><div class="label">🚫 キャンセル</div><div class="value">${cancelledOrders}件</div></div>
+  `;
+
+  renderNicknameTab(nicknameProductSet);
+  renderNormalTab(nicknameProductSet);
+  renderShareTab();
+  renderShippingTab();
+  renderAllTab();
+}
+
+let nicknameViewMode = 'product';
+
+function renderNicknameTab(nicknameProductSet) {
+  const el = document.getElementById('tab-nickname');
+  const relevant = ITEMS.filter(i => nicknameProductSet.has(i.product));
+  if (!relevant.length) {
+    el.innerHTML = '<div class="empty-note">ニックネーム記入が紐づく商品は見つかりませんでした。</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="toolbar">
+      <div class="view-toggle">
+        <button id="nvProduct" class="${nicknameViewMode === 'product' ? 'active' : ''}" onclick="setNicknameView('product')">商品・メンバー別</button>
+        <button id="nvTime" class="${nicknameViewMode === 'time' ? 'active' : ''}" onclick="setNicknameView('time')">購入時間順</button>
+      </div>
+    </div>
+    <div id="nickname-product-view" style="display:${nicknameViewMode === 'product' ? 'block' : 'none'}"></div>
+    <div id="nickname-time-view" style="display:${nicknameViewMode === 'time' ? 'block' : 'none'}"></div>
+  `;
+  document.getElementById('nickname-product-view').innerHTML = buildNicknameProductView(relevant);
+  document.getElementById('nickname-time-view').innerHTML = buildNicknameTimeView(relevant);
+}
+
+function setNicknameView(mode) {
+  nicknameViewMode = mode;
+  document.getElementById('nvProduct').classList.toggle('active', mode === 'product');
+  document.getElementById('nvTime').classList.toggle('active', mode === 'time');
+  document.getElementById('nickname-product-view').style.display = mode === 'product' ? 'block' : 'none';
+  document.getElementById('nickname-time-view').style.display = mode === 'time' ? 'block' : 'none';
+}
+
+function buildNicknameProductView(relevant) {
+  const byProduct = new Map();
+  for (const i of relevant) {
+    if (!byProduct.has(i.product)) byProduct.set(i.product, new Map());
+    const byMember = byProduct.get(i.product);
+    const key = i.member;
+    if (!byMember.has(key)) byMember.set(key, { qty: 0, nicks: new Map() });
+    const m = byMember.get(key);
+    m.qty += i.qty;
+    const nk = i.nickname || '(未記入)';
+    if (!m.nicks.has(nk)) m.nicks.set(nk, { qty: 0, entries: [] });
+    const n = m.nicks.get(nk);
+    n.qty += i.qty;
+    const o = orderOf(i);
+    n.entries.push({ name: o.billName, qty: i.qty, date: o.date, unpaid: effectiveUnpaid(o), cancelled: o.cancelled });
+  }
+
+  let html = '';
+  let blockIdx = 0;
+  for (const [product, byMember] of byProduct) {
+    const productTotal = [...byMember.values()].reduce((s, m) => s + m.qty, 0);
+    blockIdx++;
+    html += `<div class="product-block">
+      <div class="product-head" onclick="toggleBlock(${blockIdx})">
+        <div class="product-title">${escapeHtml(product)}<span class="badge">ニックネームあり</span></div>
+        <div class="product-total">合計 ${productTotal} 枚</div>
+      </div>
+      <div class="product-body" id="pb-${blockIdx}">`;
+
+    const sortedMembers = [...byMember.entries()].sort((a, b) => b[1].qty - a[1].qty);
+    let mi = 0;
+    for (const [member, data] of sortedMembers) {
+      mi++;
+      const detailId = `nd-${blockIdx}-${mi}`;
+      html += `<div class="member-row">
+        <div><span class="member-name">${escapeHtml(member)}</span>
+          <span class="nick-toggle" onclick="toggleNick('${detailId}')">ニックネーム内訳を見る</span>
+        </div>
+        <div class="member-count">${data.qty} 枚</div>
+      </div>
+      <div class="nick-detail" id="${detailId}">`;
+      const sortedNicks = [...data.nicks.entries()].sort((a, b) => b[1].qty - a[1].qty);
+      for (const [nick, nd] of sortedNicks) {
+        const parts = nd.entries.map((e, idx) => {
+          let tag = '';
+          if (e.cancelled) tag = ' <span class="badge cancelled">キャンセル</span>';
+          else if (e.unpaid) tag = ' <span class="badge unpaid">未入金?</span>';
+          return `${idx + 1}. ${escapeHtml(e.name)}(${e.qty}枚・${escapeHtml(formatDateTime(e.date))})${tag}`;
+        });
+        html += `<div>・<b>${escapeHtml(nick)}</b>${dupBadge(nick)}　${nd.qty}枚　（${parts.join('、')}）</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+  return html;
+}
+
+function buildNicknameTimeView(relevant) {
+  const rows = relevant.map(i => {
+    const o = orderOf(i);
+    return {
+      date: o.date, product: i.product, member: i.member,
+      nickname: i.nickname || '(未記入)', qty: i.qty, name: o.billName,
+      unpaid: effectiveUnpaid(o), cancelled: o.cancelled,
+    };
+  }).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  let html = `<div class="table-scroll"><table><thead><tr>
+    <th>No.</th><th>購入時間</th><th>商品名</th><th>メンバー</th><th>ニックネーム</th><th>枚数</th><th>購入者</th><th>状態</th>
+  </tr></thead><tbody>`;
+  rows.forEach((r, idx) => {
+    const rowClass = r.cancelled ? 'cancelled' : (r.unpaid ? 'unpaid' : '');
+    const status = r.cancelled ? '<span class="badge cancelled">キャンセル</span>' : (r.unpaid ? '<span class="badge unpaid">未入金?</span>' : '');
+    html += `<tr class="${rowClass}">
+      <td>${idx + 1}</td><td>${escapeHtml(formatDateTime(r.date))}</td><td>${escapeHtml(r.product)}</td><td>${escapeHtml(r.member)}</td>
+      <td>${escapeHtml(r.nickname)}${dupBadge(r.nickname)}</td><td>${r.qty}</td><td>${escapeHtml(r.name)}</td><td>${status}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderNormalTab(nicknameProductSet) {
+  const el = document.getElementById('tab-normal');
+  const relevant = ITEMS.filter(i => !nicknameProductSet.has(i.product));
+  if (!relevant.length) {
+    el.innerHTML = '<div class="empty-note">ニックネームが付かない商品は見つかりませんでした。</div>';
+    return;
+  }
+  const byProduct = new Map();
+  for (const i of relevant) {
+    const varKey = i.variation || '(バリエーションなし)';
+    const pkey = i.product + '|' + varKey;
+    if (!byProduct.has(pkey)) byProduct.set(pkey, { product: i.product, variation: varKey, qty: 0, purchasers: new Set(), unpaidQty: 0, cancelledQty: 0 });
+    const p = byProduct.get(pkey);
+    p.qty += i.qty;
+    const o = orderOf(i);
+    p.purchasers.add(o.billName);
+    if (o.cancelled) p.cancelledQty += i.qty;
+    else if (effectiveUnpaid(o)) p.unpaidQty += i.qty;
+  }
+  const rows = [...byProduct.values()].sort((a, b) => b.qty - a.qty);
+  let html = `<div class="table-scroll"><table><thead><tr>
+    <th>商品名</th><th>バリエーション</th><th>合計数量</th><th>購入者数</th><th>うち未入金分</th><th>うちキャンセル分</th>
+  </tr></thead><tbody>`;
+  for (const r of rows) {
+    html += `<tr><td>${escapeHtml(r.product)}</td><td>${escapeHtml(r.variation)}</td><td>${r.qty}</td><td>${r.purchasers.size}</td>
+      <td>${r.unpaidQty > 0 ? `<span class="badge unpaid">${r.unpaidQty}枚</span>` : '-'}</td>
+      <td>${r.cancelledQty > 0 ? `<span class="badge cancelled">${r.cancelledQty}枚</span>` : '-'}</td></tr>`;
+  }
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+function renderShareTab() {
+  const el = document.getElementById('tab-share');
+  const nicknameProductSet = new Set(ITEMS.filter(i => i.nickname !== null).map(i => i.product));
+  const products = [...nicknameProductSet].sort();
+  if (!products.length) {
+    el.innerHTML = '<div class="empty-note">ニックネーム記入対象の商品が見つかりませんでした。</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="toolbar">
+      <select class="member-select" id="productSelect"></select>
+      <select class="member-select" id="memberSelect"></select>
+      <div class="view-toggle">
+        <button id="svAgg" class="${shareViewMode === 'agg' ? 'active' : ''}" onclick="setShareView('agg')">ニックネーム集計</button>
+        <button id="svTime" class="${shareViewMode === 'time' ? 'active' : ''}" onclick="setShareView('time')">購入時間順</button>
+      </div>
+      <label class="checkline"><input type="checkbox" id="excludeUnpaidShare"> 未入金・キャンセルの注文を除く</label>
+      <button class="dl-btn" onclick="copyShareList()">コピー</button>
+      <button class="dl-btn secondary" onclick="downloadShareCsv()">CSVで保存</button>
+      <button class="dl-btn pdf" onclick="printShareList()">PDFで保存/印刷</button>
+    </div>
+    <div class="share-title" id="shareTitle"></div>
+    <div class="copy-fallback" id="shareCopyFallback">
+      <p>自動コピーができない環境のようです。下のテキストを選択してコピーしてください。</p>
+      <textarea id="shareCopyText" readonly></textarea>
+    </div>
+    <div class="table-scroll"><table>
+      <thead id="shareTableHead"></thead>
+      <tbody id="shareTableBody"></tbody>
+    </table></div>
+  `;
+  const productSel = document.getElementById('productSelect');
+  productSel.innerHTML = products.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+  productSel.addEventListener('change', () => { populateMemberSelect(); fillShareTable(); });
+  document.getElementById('memberSelect').addEventListener('change', fillShareTable);
+  document.getElementById('excludeUnpaidShare').addEventListener('change', fillShareTable);
+  populateMemberSelect();
+  fillShareTable();
+}
+
+function populateMemberSelect() {
+  const product = document.getElementById('productSelect').value;
+  const members = [...new Set(ITEMS.filter(i => i.product === product && i.nickname !== null).map(i => i.member))].sort();
+  const sel = document.getElementById('memberSelect');
+  sel.innerHTML = members.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+}
+
+let shareViewMode = 'agg';
+
+function setShareView(mode) {
+  shareViewMode = mode;
+  document.getElementById('svAgg').classList.toggle('active', mode === 'agg');
+  document.getElementById('svTime').classList.toggle('active', mode === 'time');
+  fillShareTable();
+}
+
+function fillShareTable() {
+  const product = document.getElementById('productSelect').value;
+  const member = document.getElementById('memberSelect').value;
+  const excludeUnpaid = document.getElementById('excludeUnpaidShare').checked;
+  let relevant = ITEMS.filter(i => i.product === product && i.nickname !== null && i.member === member);
+  if (excludeUnpaid) relevant = relevant.filter(i => { const o = orderOf(i); return !o.cancelled && !effectiveUnpaid(o); });
+
+  let head, bodyRows;
+  if (shareViewMode === 'time') {
+    head = ['No.', '購入時間', 'メンバー名', 'ニックネーム', '枚数'];
+    const rows = relevant.map(i => {
+      const o = orderOf(i);
+      return { date: o.date, nickname: i.nickname || '(未記入)', qty: i.qty };
+    }).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    bodyRows = rows.map((r, idx) => [String(idx + 1), formatDateTime(r.date), member, r.nickname, String(r.qty)]);
+  } else {
+    head = ['No.', 'メンバー名', 'ニックネーム', '枚数'];
+    const byNick = new Map();
+    for (const i of relevant) {
+      const nk = i.nickname || '(未記入)';
+      byNick.set(nk, (byNick.get(nk) || 0) + i.qty);
+    }
+    const rows = [...byNick.entries()].sort((a, b) => b[1] - a[1]);
+    bodyRows = rows.map(([nick, qty], idx) => [String(idx + 1), member, nick, String(qty)]);
+  }
+
+  const nickColIdx = shareViewMode === 'time' ? 3 : 2;
+  document.getElementById('shareTableHead').innerHTML = `<tr>${head.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr>`;
+  document.getElementById('shareTableBody').innerHTML = bodyRows.length
+    ? bodyRows.map(r => `<tr>${r.map((c, ci) => `<td>${escapeHtml(c)}${ci === nickColIdx ? dupBadge(c) : ''}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${head.length}" class="empty-note">対象データがありません</td></tr>`;
+  document.getElementById('shareTitle').textContent = `【${product}】${member}`;
+  document.getElementById('shareCopyFallback').style.display = 'none';
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) return true;
+  } catch (e) {}
+  return false;
+}
+
+async function copyShareList() {
+  const product = document.getElementById('productSelect').value;
+  const member = document.getElementById('memberSelect').value;
+  const headCells = [...document.querySelectorAll('#shareTableHead th')].map(th => th.textContent);
+  const rows = [...document.querySelectorAll('#shareTableBody tr')].map(tr =>
+    [...tr.children].map(td => td.textContent).join('\t')
+  );
+  const text = `${product}\n` + headCells.join('\t') + '\n' + rows.join('\n');
+  const ok = await copyText(text);
+  const fb = document.getElementById('shareCopyFallback');
+  if (ok) {
+    fb.style.display = 'none';
+    alert(`${product}／${member} のリストをコピーしました`);
+  } else {
+    document.getElementById('shareCopyText').value = text;
+    fb.style.display = 'block';
+    document.getElementById('shareCopyText').focus();
+    document.getElementById('shareCopyText').select();
+  }
+}
+
+function downloadShareCsv() {
+  const product = document.getElementById('productSelect').value;
+  const member = document.getElementById('memberSelect').value;
+  const headCells = [...document.querySelectorAll('#shareTableHead th')].map(th => `"${th.textContent.replace(/"/g, '""')}"`);
+  const rows = [...document.querySelectorAll('#shareTableBody tr')].map(tr =>
+    [...tr.children].map(td => `"${td.textContent.replace(/"/g, '""')}"`).join(',')
+  );
+  const csv = '\uFEFF' + [`"${product}"`, headCells.join(','), ...rows].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${product}_${member}_ニックネームリスト.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function printShareList() {
+  const product = document.getElementById('productSelect').value;
+  const member = document.getElementById('memberSelect').value;
+  document.getElementById('printTitle').textContent = `【${escapeHtml(product)}】${escapeHtml(member)} ニックネーム記入リスト`;
+  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　表示: ${shareViewMode === 'time' ? '購入時間順' : 'ニックネーム集計'}`;
+  const headCells = [...document.querySelectorAll('#shareTableHead th')].map(th => th.textContent);
+  const rows = [...document.querySelectorAll('#shareTableBody tr')].map(tr => [...tr.children].map(td => td.textContent));
+  let tableHtml = `<table><thead><tr>${headCells.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>`;
+  for (const r of rows) tableHtml += `<tr>${r.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`;
+  tableHtml += '</tbody></table>';
+  document.getElementById('printBody').innerHTML = tableHtml;
+  window.print();
+}
+
+function renderShippingTab() {
+  const el = document.getElementById('tab-shipping');
+  const groups = new Map();
+  for (const o of ORDERS.values()) {
+    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        names: new Set(), emails: new Set(), zips: new Set(), addrs: new Set(), phones: new Set(),
+        payMethods: new Set(), nicknames: new Set(), members: new Map(), oids: [], totalQty: 0,
+        totalAmount: 0, unpaidQty: 0, cancelledQty: 0, anyUnpaid: false, anyCancelled: false,
+      });
+    }
+    const g = groups.get(key);
+    g.names.add(o.shipName);
+    if (o.email) g.emails.add(o.email);
+    if (o.zip) g.zips.add(o.zip);
+    const addr = `${o.pref}${o.addr1}${o.addr2 ? ' ' + o.addr2 : ''}`;
+    if (addr.trim()) g.addrs.add(addr);
+    if (o.phone) g.phones.add(o.phone);
+    if (o.payMethod) g.payMethods.add(o.payMethod);
+    g.oids.push(o.oid);
+    g.totalAmount += o.amountSum;
+    if (effectiveUnpaid(o)) g.anyUnpaid = true;
+    if (o.cancelled) g.anyCancelled = true;
+  }
+  for (const i of ITEMS) {
+    const o = orderOf(i);
+    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    const g = groups.get(key);
+    if (!g) continue;
+    g.totalQty += i.qty;
+    if (o.cancelled) g.cancelledQty += i.qty;
+    else if (effectiveUnpaid(o)) g.unpaidQty += i.qty;
+    if (i.nickname) g.nicknames.add(i.nickname);
+    const mkey = i.product + '｜' + i.member;
+    g.members.set(mkey, (g.members.get(mkey) || 0) + i.qty);
+  }
+
+  const rows = [...groups.values()].sort((a, b) => b.totalQty - a.totalQty);
+  el.innerHTML = `
+    <div class="toolbar">
+      <input type="text" class="search-box" id="shipSearch" placeholder="購入者名・住所・ニックネームで検索">
+      <label class="checkline"><input type="checkbox" id="excludeUnpaidShip"> 未入金・キャンセルの注文を除く</label>
+      <button class="dl-btn" onclick="downloadShippingCsv()">CSVで保存</button>
+      <button class="dl-btn pdf" onclick="printShippingList()">PDFで保存/印刷</button>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>メール</th>
+        <th>合計枚数</th><th>商品・メンバー内訳</th><th>ニックネーム</th><th>支払い方法</th><th>注文ID</th>
+      </tr></thead>
+      <tbody id="shipTableBody"></tbody>
+    </table></div>
+  `;
+  window._shipRows = rows;
+  fillShippingTable(rows);
+  document.getElementById('shipSearch').addEventListener('input', applyShipFilter);
+  document.getElementById('excludeUnpaidShip').addEventListener('change', applyShipFilter);
+}
+
+function applyShipFilter() {
+  const q = document.getElementById('shipSearch').value.trim().toLowerCase();
+  const excludeUnpaid = document.getElementById('excludeUnpaidShip').checked;
+  let rows = window._shipRows;
+  if (excludeUnpaid) rows = rows.filter(g => !g.anyUnpaid && !g.anyCancelled);
+  if (q) rows = rows.filter(g =>
+    [...g.names].join('').toLowerCase().includes(q) ||
+    [...g.addrs].join('').toLowerCase().includes(q) ||
+    [...g.nicknames].join('').toLowerCase().includes(q)
+  );
+  fillShippingTable(rows);
+}
+
+function qtyBadge(g) {
+  let out = `${g.totalQty}枚`;
+  const tags = [];
+  if (g.cancelledQty > 0) tags.push(`<span class="badge cancelled">うち${g.cancelledQty}枚 キャンセル</span>`);
+  if (g.unpaidQty > 0) tags.push(`<span class="badge unpaid">うち${g.unpaidQty}枚 未入金?</span>`);
+  if (tags.length) out += ' ' + tags.join(' ');
+  return out;
+}
+
+function fillShippingTable(rows) {
+  document.getElementById('shipTableBody').innerHTML = rows.map((g, idx) => {
+    const memberList = breakdownHtml(g.members);
+    const rowClass = g.anyCancelled ? 'cancelled' : (g.anyUnpaid ? 'unpaid' : '');
+    return `<tr class="${rowClass}">
+      <td>${idx + 1}</td>
+      <td>${escapeHtml([...g.names].join(' / '))}</td>
+      <td>${escapeHtml([...g.zips].join(' / '))}</td>
+      <td>${escapeHtml([...g.addrs].join(' / '))}</td>
+      <td>${escapeHtml([...g.phones].join(' / '))}</td>
+      <td>${escapeHtml([...g.emails].join(' / '))}</td>
+      <td>${qtyBadge(g)}</td>
+      <td>${memberList}</td>
+      <td>${nicknamesHtml(g.nicknames)}</td>
+      <td>${escapeHtml([...g.payMethods].join('、'))}</td>
+      <td>${escapeHtml(g.oids.join('、'))}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="11" class="empty-note">対象データがありません</td></tr>';
+}
+
+function downloadShippingCsv() {
+  const header = ['No.','購入者名','郵便番号','住所','電話番号','メール','合計枚数','うち未入金枚数','うちキャンセル枚数','商品・メンバー内訳','ニックネーム','支払い方法','注文ID'];
+  const lines = [header.join(',')];
+  window._shipRows.forEach((g, idx) => {
+    const memberList = breakdownText(g.members);
+    const row = [
+      idx + 1, [...g.names].join(' / '), [...g.zips].join(' / '), [...g.addrs].join(' / '),
+      [...g.phones].join(' / '), [...g.emails].join(' / '), g.totalQty, g.unpaidQty, g.cancelledQty, memberList,
+      nicknamesText(g.nicknames), [...g.payMethods].join('、'), g.oids.join('、'),
+    ];
+    lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+  });
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '購入者別_発送まとめ.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function printShippingList() {
+  document.getElementById('printTitle').textContent = '購入者別 発送まとめ';
+  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　対象: ${window._shipRows.length}件`;
+  let tableHtml = `<table><thead><tr>
+    <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>合計枚数</th><th>内訳</th><th>ニックネーム</th>
+  </tr></thead><tbody>`;
+  window._shipRows.forEach((g, idx) => {
+    const memberList = breakdownHtml(g.members);
+    let qtyText = `${g.totalQty}枚`;
+    const flags = [];
+    if (g.cancelledQty > 0) flags.push(`${g.cancelledQty}枚 キャンセル`);
+    if (g.unpaidQty > 0) flags.push(`${g.unpaidQty}枚 未入金?`);
+    if (flags.length) qtyText += `（うち${flags.join('、')}）`;
+    tableHtml += `<tr>
+      <td>${idx + 1}</td>
+      <td>${escapeHtml([...g.names].join(' / '))}</td>
+      <td>${escapeHtml([...g.zips].join(' / '))}</td>
+      <td>${escapeHtml([...g.addrs].join(' / '))}</td>
+      <td>${escapeHtml([...g.phones].join(' / '))}</td>
+      <td>${qtyText}</td>
+      <td>${memberList}</td>
+      <td>${nicknamesHtml(g.nicknames)}</td>
+    </tr>`;
+  });
+  tableHtml += '</tbody></table>';
+  document.getElementById('printBody').innerHTML = tableHtml;
+  window.print();
+}
+
+function renderAllTab() {
+  const el = document.getElementById('tab-all');
+  el.innerHTML = `
+    <div class="toolbar">
+      <input type="text" class="search-box" id="searchBox" placeholder="購入者名・商品名・ニックネームで検索">
+      <label class="checkline"><input type="checkbox" id="excludeUnpaidAll"> 未入金・キャンセルの注文を除く</label>
+      <button class="dl-btn" onclick="downloadCsv()">この一覧をCSVで保存</button>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr>
+        <th>注文ID</th><th>注文日時</th><th>購入者名</th><th>商品名</th><th>メンバー/バリエーション</th>
+        <th>数量</th><th>ニックネーム</th><th>支払い方法</th><th>状態</th><th></th>
+      </tr></thead>
+      <tbody id="allTableBody"></tbody>
+    </table></div>
+  `;
+  applyAllFilter();
+  document.getElementById('searchBox').addEventListener('input', applyAllFilter);
+  document.getElementById('excludeUnpaidAll').addEventListener('change', applyAllFilter);
+}
+
+function applyAllFilter() {
+  const q = document.getElementById('searchBox').value.trim().toLowerCase();
+  const excludeUnpaid = document.getElementById('excludeUnpaidAll').checked;
+  let items = ITEMS;
+  if (excludeUnpaid) items = items.filter(i => { const o = orderOf(i); return !o.cancelled && !effectiveUnpaid(o); });
+  if (q) items = items.filter(i => {
+    const o = orderOf(i);
+    return (o.billName || '').toLowerCase().includes(q) ||
+      (i.product || '').toLowerCase().includes(q) ||
+      (i.member || '').toLowerCase().includes(q) ||
+      (i.nickname || '').toLowerCase().includes(q);
+  });
+  window._allFiltered = items;
+  const body = document.getElementById('allTableBody');
+  body.innerHTML = items.map(i => {
+    const o = orderOf(i);
+    const unpaid = effectiveUnpaid(o);
+    let statusHtml;
+    if (o.cancelled) statusHtml = '<span class="badge cancelled">キャンセル</span>';
+    else if (o.manualPaid === true) statusHtml = '<span class="badge paid-manual">入金確認済み(手動)</span>';
+    else if (unpaid) statusHtml = '<span class="badge unpaid-strong">未入金?</span>';
+    else statusHtml = '支払い方法から判定：問題なし';
+    const btn = o.cancelled ? '' : `<button class="mini-btn ${o.manualPaid === true ? 'active-paid' : ''}" onclick="toggleManualPaid('${o.oid}')">${o.manualPaid === true ? '確認を取り消す' : '入金確認OK'}</button>`;
+    const rowClass = o.cancelled ? 'cancelled' : (unpaid ? 'unpaid' : '');
+    return `<tr class="${rowClass}">
+      <td>${escapeHtml(i.oid)}</td><td>${escapeHtml(o.date)}</td><td>${escapeHtml(o.billName)}</td>
+      <td>${escapeHtml(i.product)}</td><td>${escapeHtml(i.member || i.variation)}</td>
+      <td>${i.qty}</td><td>${escapeHtml(i.nickname || '')}</td><td>${escapeHtml(o.payMethod)}</td>
+      <td>${statusHtml}</td><td>${btn}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="10" class="empty-note">対象データがありません</td></tr>';
+}
+
+function toggleBlock(idx) { document.getElementById(`pb-${idx}`).classList.toggle('open'); }
+function toggleNick(id) { document.getElementById(id).classList.toggle('open'); }
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function downloadCsv() {
+  const header = ['注文ID','注文日時','購入者名','商品名','メンバー/バリエーション','数量','ニックネーム','支払い方法','状態'];
+  const lines = [header.join(',')];
+  for (const i of window._allFiltered || ITEMS) {
+    const o = orderOf(i);
+    let status = '';
+    if (o.cancelled) status = 'キャンセル';
+    else if (o.manualPaid === true) status = '入金確認済み(手動)';
+    else if (effectiveUnpaid(o)) status = '未入金?';
+    const row = [i.oid, o.date, o.billName, i.product, i.member || i.variation, i.qty, i.nickname || '', o.payMethod, status];
+    lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '受注明細_集計結果.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>
