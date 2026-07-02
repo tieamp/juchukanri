@@ -276,6 +276,9 @@ const MEMBER_COLORS = {
   '橘ゆきの': '#E08A2B',
   '星月れみな': '#B8960C',
   '彩恋なな': '#D64545',
+  '姫咲める': '#D64545',
+  '日乃ひまり': '#B8960C',
+  '水瀬くれあ': '#2E7DD7',
 };
 function memberColorSpan(name) {
   const c = MEMBER_COLORS[name];
@@ -413,12 +416,16 @@ function parseAndRender(raw) {
         if (pending) { pending.nickname = variation; flush(); }
       } else {
         flush();
-        const m = variation.match(/^(.*?)[【\[]/);
-        pending = {
-          oid, product: prod, variation,
-          member: m ? m[1].trim() : (variation || '(メンバー指定なし)'),
-          qty, nickname: null,
-        };
+        const bracketMatch = variation.match(/^(.*?)[【\[]/);
+        let member = bracketMatch ? bracketMatch[1].trim() : '';
+        if (!member) {
+          // No bracketed variation (e.g. some support-goods products leave
+          // variation blank). Try to detect a known member name embedded in
+          // the variation text or the product title itself before giving up.
+          const known = Object.keys(MEMBER_COLORS).find(name => variation.includes(name) || prod.includes(name));
+          member = known || variation || '(全体)';
+        }
+        pending = { oid, product: prod, variation, member, qty, nickname: null };
       }
     }
     flush();
