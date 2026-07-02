@@ -201,12 +201,14 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="nickname">ニックネーム記入商品</button>
       <button class="tab-btn" data-tab="normal">通常商品</button>
+      <button class="tab-btn" data-tab="benefits">特典管理</button>
       <button class="tab-btn" data-tab="share">メンバー別共有リスト</button>
       <button class="tab-btn" data-tab="shipping">購入者別 発送まとめ</button>
       <button class="tab-btn" data-tab="all">全注文明細</button>
     </div>
 
     <div class="tab-panel active" id="tab-nickname"></div>
+    <div class="tab-panel" id="tab-benefits"></div>
     <div class="tab-panel" id="tab-normal"></div>
     <div class="tab-panel" id="tab-share"></div>
     <div class="tab-panel" id="tab-shipping"></div>
@@ -492,6 +494,7 @@ function render() {
 
   renderNicknameTab(nicknameProductSet);
   renderNormalTab(nicknameProductSet);
+  renderBenefitsTab();
   renderShareTab();
   renderShippingTab();
   renderAllTab();
@@ -641,6 +644,134 @@ function renderNormalTab(nicknameProductSet) {
   }
   html += `</tbody></table></div>`;
   el.innerHTML = html;
+}
+
+// Benefit thresholds — adjust here if the campaign rules change.
+const CHEKI_BENEFIT_THRESHOLD = 7;
+const FLOWER_TIERS = [
+  { label: '5口以上', min: 5, max: Infinity },
+  { label: '3〜4口', min: 3, max: 4 },
+  { label: '1〜2口', min: 1, max: 2 },
+];
+
+// Aggregates cheki / flower-stand quantities per purchaser (same identity
+// logic as the shipping tab: email, falling back to name+phone), so
+// "同じ購入者" is counted across all of their orders, not per single order.
+function buildBenefitAggregates() {
+  const groups = new Map();
+  for (const o of ORDERS.values()) {
+    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    if (!groups.has(key)) {
+      groups.set(key, { name: o.billName, email: o.email, chekiQty: 0, flowerQty: 0, oids: new Set(), anyCancelled: false });
+    }
+  }
+  for (const i of ITEMS) {
+    const o = orderOf(i);
+    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    const g = groups.get(key);
+    if (!g) continue;
+    g.oids.add(i.oid);
+    if (o.cancelled) g.anyCancelled = true;
+    else {
+      if (i.product.includes('チェキ')) g.chekiQty += i.qty;
+      if (i.product.includes('スタンドフラワー')) g.flowerQty += i.qty;
+    }
+  }
+  return [...groups.values()];
+}
+
+function renderBenefitsTab() {
+  const el = document.getElementById('tab-benefits');
+  const purchasers = buildBenefitAggregates();
+
+  const chekiRows = purchasers.filter(p => p.chekiQty > 0).sort((a, b) => b.chekiQty - a.chekiQty);
+  const chekiQualified = chekiRows.filter(p => p.chekiQty >= CHEKI_BENEFIT_THRESHOLD);
+
+  const flowerRows = purchasers.filter(p => p.flowerQty > 0).sort((a, b) => b.flowerQty - a.flowerQty);
+  const flowerByTier = FLOWER_TIERS.map(tier => ({
+    ...tier,
+    people: flowerRows.filter(p => p.flowerQty >= tier.min && p.flowerQty <= tier.max),
+  }));
+
+  window._benefitCheki = chekiRows;
+  window._benefitFlowerTiers = flowerByTier;
+
+  let html = `
+    <div class="note-box">
+      🎁 チェキは同じ購入者の合計が${CHEKI_BENEFIT_THRESHOLD}枚以上で特典対象、スタンドフラワーは合計口数で「1〜2口」「3〜4口」「5口以上」の3段階で特典内容が変わる、という前提で集計しています。基準を変えたい場合は教えてください。
+    </div>
+
+    <div class="product-block">
+      <div class="product-head" onclick="toggleBlock('benefit-cheki')">
+        <div class="product-title">🎫 オンラインチェキ特典（${CHEKI_BENEFIT_THRESHOLD}枚以上）<span class="badge">対象 ${chekiQualified.length}名</span></div>
+        <div class="product-total">購入者 ${chekiRows.length}名</div>
+      </div>
+      <div class="product-body open" id="pb-benefit-cheki">
+        <div class="toolbar"><button class="dl-btn secondary" onclick="downloadBenefitCsv('cheki')">CSVで保存</button></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>No.</th><th>購入者名</th><th>合計チェキ枚数</th><th>特典</th></tr></thead>
+          <tbody>
+            ${chekiRows.map((p, idx) => `<tr class="${p.chekiQty >= CHEKI_BENEFIT_THRESHOLD ? '' : ''}">
+              <td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${p.chekiQty}枚</td>
+              <td>${p.chekiQty >= CHEKI_BENEFIT_THRESHOLD ? '<span class="badge paid-manual">🎁対象</span>' : `あと${CHEKI_BENEFIT_THRESHOLD - p.chekiQty}枚`}</td>
+            </tr>`).join('') || '<tr><td colspan="4" class="empty-note">対象データがありません</td></tr>'}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div class="product-block">
+      <div class="product-head" onclick="toggleBlock('benefit-flower')">
+        <div class="product-title">💐 スタンドフラワー特典（口数で3段階）</div>
+        <div class="product-total">購入者 ${flowerRows.length}名</div>
+      </div>
+      <div class="product-body open" id="pb-benefit-flower">
+        <div class="toolbar"><button class="dl-btn secondary" onclick="downloadBenefitCsv('flower')">CSVで保存</button></div>
+        ${flowerByTier.map(tier => `
+          <div style="margin-bottom:14px;">
+            <div class="member-row" style="border-top:none;"><span class="member-name">${escapeHtml(tier.label)}</span><span class="member-count">${tier.people.length}名</span></div>
+            <div class="table-scroll"><table>
+              <thead><tr><th>No.</th><th>購入者名</th><th>合計口数</th></tr></thead>
+              <tbody>
+                ${tier.people.map((p, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${p.flowerQty}口</td></tr>`).join('') || '<tr><td colspan="3" class="empty-note">対象者なし</td></tr>'}
+              </tbody>
+            </table></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  el.innerHTML = html;
+}
+
+function downloadBenefitCsv(kind) {
+  let header, lines, filename;
+  if (kind === 'cheki') {
+    header = ['No.', '購入者名', '合計チェキ枚数', '特典対象'];
+    lines = [header.join(',')];
+    window._benefitCheki.forEach((p, idx) => {
+      const row = [idx + 1, p.name, p.chekiQty, p.chekiQty >= CHEKI_BENEFIT_THRESHOLD ? '対象' : ''];
+      lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+    });
+    filename = 'チェキ特典対象.csv';
+  } else {
+    header = ['段階', 'No.', '購入者名', '合計口数'];
+    lines = [header.join(',')];
+    for (const tier of window._benefitFlowerTiers) {
+      tier.people.forEach((p, idx) => {
+        const row = [tier.label, idx + 1, p.name, p.flowerQty];
+        lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+      });
+    }
+    filename = 'スタンドフラワー特典段階.csv';
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function renderShareTab() {
