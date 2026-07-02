@@ -438,6 +438,17 @@ function parseAndRender(raw) {
 
 function orderOf(item) { return ORDERS.get(item.oid); }
 
+// Identifies a purchaser as a real person, not just by name text — two
+// different people can share the exact same name (同姓同名), and two orders
+// from the same person should be recognized as one. Uses email (case
+// insensitive) when available; falls back to shipping name + phone number
+// when email is missing. Used everywhere "the same purchaser" matters:
+// shipping summary grouping, benefit-qualification totals, and duplicate-
+// nickname detection.
+function purchaserKey(o) {
+  return (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+}
+
 function toggleManualPaid(oid) {
   const o = ORDERS.get(oid);
   if (!o) return;
@@ -453,10 +464,10 @@ function computeDuplicateNicknames() {
     if (!i.nickname) continue;
     const o = orderOf(i);
     if (!map.has(i.nickname)) map.set(i.nickname, new Set());
-    map.get(i.nickname).add(o.billName);
+    map.get(i.nickname).add(purchaserKey(o));
   }
   const dup = new Set();
-  for (const [nick, names] of map) if (names.size > 1) dup.add(nick);
+  for (const [nick, keys] of map) if (keys.size > 1) dup.add(nick);
   return dup;
 }
 
@@ -663,7 +674,7 @@ const FLOWER_TIERS = [
 function buildBenefitData() {
   const groups = new Map();
   function getGroup(o) {
-    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    const key = purchaserKey(o);
     if (!groups.has(key)) groups.set(key, { name: o.billName, chekiByMember: new Map(), flowerByProduct: new Map() });
     return groups.get(key);
   }
@@ -1039,7 +1050,7 @@ function renderShippingTab() {
   const el = document.getElementById('tab-shipping');
   const groups = new Map();
   for (const o of ORDERS.values()) {
-    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    const key = purchaserKey(o);
     if (!groups.has(key)) {
       groups.set(key, {
         names: new Set(), emails: new Set(), zips: new Set(), addrs: new Set(), phones: new Set(),
@@ -1062,7 +1073,7 @@ function renderShippingTab() {
   }
   for (const i of ITEMS) {
     const o = orderOf(i);
-    const key = (o.email && o.email.trim()) ? 'e:' + o.email.trim().toLowerCase() : 'n:' + o.shipName + '|' + o.phone;
+    const key = purchaserKey(o);
     const g = groups.get(key);
     if (!g) continue;
     g.totalQty += i.qty;
