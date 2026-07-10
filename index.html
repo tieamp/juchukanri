@@ -172,6 +172,7 @@
     #printArea th{background:#eee;}
   }
 </style>
+<style id="dynamicPageStyle"></style>
 </head>
 <body>
 <div class="wrap">
@@ -295,11 +296,19 @@ function sanitizeFilename(s) {
 // Runs window.print() with the document title temporarily set to
 // "{label}_{出力日時}" so that browsers suggest that as the PDF filename
 // when the person chooses "Save as PDF" in the print dialog.
-function printWithFilename(label) {
+function printWithFilename(label, orientation) {
   const suggested = `${sanitizeFilename(label)}_${outputTimestamp()}`;
   const originalTitle = document.title;
   document.title = suggested;
-  const restore = () => { document.title = originalTitle; window.removeEventListener('afterprint', restore); };
+  const pageStyleEl = document.getElementById('dynamicPageStyle');
+  pageStyleEl.textContent = orientation === 'landscape'
+    ? '@page{ size: A4 landscape; margin: 12mm; }'
+    : '@page{ size: A4 portrait; margin: 15mm; }';
+  const restore = () => {
+    document.title = originalTitle;
+    pageStyleEl.textContent = '';
+    window.removeEventListener('afterprint', restore);
+  };
   window.addEventListener('afterprint', restore);
   window.print();
   // Fallback restore in case 'afterprint' doesn't fire in this environment.
@@ -1291,7 +1300,7 @@ function printShippingList() {
   });
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
-  printWithFilename('購入者別発送まとめ');
+  printWithFilename('購入者別発送まとめ', 'landscape');
 }
 
 function renderAllTab() {
