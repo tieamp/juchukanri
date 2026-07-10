@@ -137,6 +137,11 @@
   .view-toggle button + button{border-left:1px solid var(--line);}
   .view-toggle button.active{background:var(--pink); color:#fff;}
 
+  .total-display{
+    font-family:'JetBrains Mono', monospace; font-weight:700; font-size:14px; color:var(--pink-deep);
+    background:#FBE2E7; padding:7px 14px; border-radius:8px;
+  }
+
   .prod-line{margin-bottom:6px; line-height:1.5;}
   .prod-line:last-child{margin-bottom:0;}
   .prod-chip{
@@ -550,12 +555,14 @@ function renderNicknameTab(nicknameProductSet) {
     el.innerHTML = '<div class="empty-note">ニックネーム記入が紐づく商品は見つかりませんでした。</div>';
     return;
   }
+  const totalQty = relevant.reduce((s, i) => s + i.qty, 0);
   el.innerHTML = `
     <div class="toolbar">
       <div class="view-toggle">
         <button id="nvProduct" class="${nicknameViewMode === 'product' ? 'active' : ''}" onclick="setNicknameView('product')">商品・メンバー別</button>
         <button id="nvTime" class="${nicknameViewMode === 'time' ? 'active' : ''}" onclick="setNicknameView('time')">購入時間順</button>
       </div>
+      <span class="total-display">合計 ${totalQty}枚</span>
       <button class="dl-btn pdf" onclick="printNicknameTab()">PDFで保存/印刷</button>
     </div>
     <div id="nickname-product-view" style="display:${nicknameViewMode === 'product' ? 'block' : 'none'}"></div>
@@ -993,6 +1000,7 @@ function renderShareTab() {
       <button class="dl-btn pdf" onclick="printShareList()">PDFで保存/印刷</button>
     </div>
     <div class="share-title" id="shareTitle"></div>
+    <div style="margin-bottom:12px;"><span class="total-display" id="shareTotalDisplay"></span></div>
     <div class="copy-fallback" id="shareCopyFallback">
       <p>自動コピーができない環境のようです。下のテキストを選択してコピーしてください。</p>
       <textarea id="shareCopyText" readonly></textarea>
@@ -1059,6 +1067,8 @@ function fillShareTable() {
     ? bodyRows.map(r => `<tr>${r.map((c, ci) => `<td>${escapeHtml(c)}${ci === nickColIdx ? dupBadge(c) : ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${head.length}" class="empty-note">対象データがありません</td></tr>`;
   document.getElementById('shareTitle').textContent = `【${product}】${member}`;
+  const totalQty = relevant.reduce((s, i) => s + i.qty, 0);
+  document.getElementById('shareTotalDisplay').textContent = `合計 ${totalQty}枚`;
   document.getElementById('shareCopyFallback').style.display = 'none';
 }
 
