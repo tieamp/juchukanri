@@ -152,6 +152,10 @@
   .copy-fallback p{font-size:11.5px; color:var(--ink-soft); margin:0 0 6px;}
 
   #printArea{display:none;}
+  @page{
+    size: A4 portrait;
+    margin: 15mm;
+  }
   @media print{
     body *{visibility:hidden;}
     #printArea, #printArea *{visibility:visible;}
@@ -269,6 +273,32 @@ function formatDateTime(s) {
   const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   if (!m) return s;
   return `${parseInt(m[2], 10)}/${parseInt(m[3], 10)} ${m[4]}:${m[5]}`;
+}
+
+function outputTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+// Sanitizes a name for use as a filename (removes characters that break
+// downloads / PDF "save as" suggestions across OSes).
+function sanitizeFilename(s) {
+  return String(s).replace(/[\\/:*?"<>|]/g, '').trim();
+}
+
+// Runs window.print() with the document title temporarily set to
+// "{label}_{出力日時}" so that browsers suggest that as the PDF filename
+// when the person chooses "Save as PDF" in the print dialog.
+function printWithFilename(label) {
+  const suggested = `${sanitizeFilename(label)}_${outputTimestamp()}`;
+  const originalTitle = document.title;
+  document.title = suggested;
+  const restore = () => { document.title = originalTitle; window.removeEventListener('afterprint', restore); };
+  window.addEventListener('afterprint', restore);
+  window.print();
+  // Fallback restore in case 'afterprint' doesn't fire in this environment.
+  setTimeout(restore, 3000);
 }
 
 const MEMBER_COLORS = {
@@ -526,12 +556,65 @@ function renderNicknameTab(nicknameProductSet) {
         <button id="nvProduct" class="${nicknameViewMode === 'product' ? 'active' : ''}" onclick="setNicknameView('product')">商品・メンバー別</button>
         <button id="nvTime" class="${nicknameViewMode === 'time' ? 'active' : ''}" onclick="setNicknameView('time')">購入時間順</button>
       </div>
+      <button class="dl-btn pdf" onclick="printNicknameTab()">PDFで保存/印刷</button>
     </div>
     <div id="nickname-product-view" style="display:${nicknameViewMode === 'product' ? 'block' : 'none'}"></div>
     <div id="nickname-time-view" style="display:${nicknameViewMode === 'time' ? 'block' : 'none'}"></div>
   `;
   document.getElementById('nickname-product-view').innerHTML = buildNicknameProductView(relevant);
   document.getElementById('nickname-time-view').innerHTML = buildNicknameTimeView(relevant);
+}
+
+function printNicknameTab() {
+  const nicknameProductSet = new Set(ITEMS.filter(i => i.nickname !== null).map(i => i.product));
+  const relevant = ITEMS.filter(i => nicknameProductSet.has(i.product));
+  if (!relevant.length) return;
+  const totalQty = relevant.reduce((s, i) => s + i.qty, 0);
+
+  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　表示: ${nicknameViewMode === 'time' ? '購入時間順' : '商品・メンバー別'}`;
+
+  let tableHtml;
+  if (nicknameViewMode === 'time') {
+    document.getElementById('printTitle').textContent = 'ニックネーム記入商品（購入時間順）';
+    const rows = relevant.map(i => {
+      const o = orderOf(i);
+      return { date: o.date, product: i.product, member: i.member, nickname: i.nickname || '(未記入)', qty: i.qty, name: o.billName };
+    }).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    tableHtml = `<table><thead><tr><th>No.</th><th>購入時間</th><th>商品名</th><th>メンバー</th><th>ニックネーム</th><th>枚数</th><th>購入者</th></tr></thead><tbody>`;
+    rows.forEach((r, idx) => {
+      tableHtml += `<tr><td>${idx + 1}</td><td>${escapeHtml(formatDateTime(r.date))}</td><td>${escapeHtml(r.product)}</td><td>${escapeHtml(r.member)}</td><td>${escapeHtml(r.nickname)}</td><td>${r.qty}</td><td>${escapeHtml(r.name)}</td></tr>`;
+    });
+    tableHtml += `<tr><td colspan="5" style="text-align:right;font-weight:bold;">合計</td><td style="font-weight:bold;">${totalQty}枚</td><td></td></tr>`;
+    tableHtml += '</tbody></table>';
+  } else {
+    document.getElementById('printTitle').textContent = 'ニックネーム記入商品（商品・メンバー別）';
+    const byProduct = new Map();
+    for (const i of relevant) {
+      if (!byProduct.has(i.product)) byProduct.set(i.product, new Map());
+      const byMember = byProduct.get(i.product);
+      if (!byMember.has(i.member)) byMember.set(i.member, new Map());
+      const byNick = byMember.get(i.member);
+      const nk = i.nickname || '(未記入)';
+      const o = orderOf(i);
+      if (!byNick.has(nk)) byNick.set(nk, { qty: 0, purchasers: [] });
+      const n = byNick.get(nk);
+      n.qty += i.qty;
+      n.purchasers.push(`${o.billName}(${i.qty}枚)`);
+    }
+    tableHtml = `<table><thead><tr><th>商品名</th><th>メンバー</th><th>ニックネーム</th><th>枚数</th><th>購入者</th></tr></thead><tbody>`;
+    for (const [product, byMember] of byProduct) {
+      for (const [member, byNick] of byMember) {
+        for (const [nick, data] of byNick) {
+          tableHtml += `<tr><td>${escapeHtml(product)}</td><td>${escapeHtml(member)}</td><td>${escapeHtml(nick)}</td><td>${data.qty}枚</td><td>${escapeHtml(data.purchasers.join('、'))}</td></tr>`;
+        }
+      }
+    }
+    tableHtml += `<tr><td colspan="3" style="text-align:right;font-weight:bold;">合計</td><td style="font-weight:bold;">${totalQty}枚</td><td></td></tr>`;
+    tableHtml += '</tbody></table>';
+  }
+
+  document.getElementById('printBody').innerHTML = tableHtml;
+  printWithFilename('ニックネーム記入商品');
 }
 
 function setNicknameView(mode) {
@@ -848,7 +931,8 @@ function printBenefitShare(shareId) {
   for (const r of data.rows) tableHtml += `<tr>${r.map(c => `<td>${escapeHtml(String(c))}</td>`).join('')}</tr>`;
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
-  window.print();
+  const label = shareId.startsWith('cheki-') ? shareId.slice('cheki-'.length) : shareId.slice('flower-'.length);
+  printWithFilename(label);
 }
 
 function downloadBenefitCsv(shareId) {
@@ -1039,11 +1123,13 @@ function printShareList() {
   document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　表示: ${shareViewMode === 'time' ? '購入時間順' : 'ニックネーム集計'}`;
   const headCells = [...document.querySelectorAll('#shareTableHead th')].map(th => th.textContent);
   const rows = [...document.querySelectorAll('#shareTableBody tr')].map(tr => [...tr.children].map(td => td.textContent));
+  const totalQty = rows.reduce((s, r) => s + (parseInt(r[r.length - 1], 10) || 0), 0);
   let tableHtml = `<table><thead><tr>${headCells.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>`;
   for (const r of rows) tableHtml += `<tr>${r.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`;
+  tableHtml += `<tr><td colspan="${headCells.length - 1}" style="text-align:right;font-weight:bold;">合計</td><td style="font-weight:bold;">${totalQty}枚</td></tr>`;
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
-  window.print();
+  printWithFilename(member);
 }
 
 function renderShippingTab() {
@@ -1195,7 +1281,7 @@ function printShippingList() {
   });
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
-  window.print();
+  printWithFilename('購入者別発送まとめ');
 }
 
 function renderAllTab() {
