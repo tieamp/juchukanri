@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <style>
   :root{
     --paper:#FAF6EE; --card:#FFFFFF; --ink:#2A2420; --ink-soft:#6E6459; --line:#E7DECB;
@@ -214,6 +216,7 @@
       <button class="tab-btn" data-tab="benefits">特典管理</button>
       <button class="tab-btn" data-tab="share">メンバー別共有リスト</button>
       <button class="tab-btn" data-tab="shipping">購入者別 発送まとめ</button>
+      <button class="tab-btn" data-tab="invoice">納品書PDF処理</button>
       <button class="tab-btn" data-tab="all">全注文明細</button>
     </div>
 
@@ -222,6 +225,7 @@
     <div class="tab-panel" id="tab-normal"></div>
     <div class="tab-panel" id="tab-share"></div>
     <div class="tab-panel" id="tab-shipping"></div>
+    <div class="tab-panel" id="tab-invoice"></div>
     <div class="tab-panel" id="tab-all"></div>
   </div>
 
@@ -552,6 +556,7 @@ function render() {
   renderBenefitsTab();
   renderShareTab();
   renderShippingTab();
+  renderInvoiceTab();
   renderAllTab();
 }
 
@@ -1189,7 +1194,13 @@ function renderShippingTab() {
     g.members.set(mkey, (g.members.get(mkey) || 0) + i.qty);
   }
 
-  const rows = [...groups.values()].sort((a, b) => b.totalQty - a.totalQty);
+  // Sorted newest-purchase-first (based on each purchaser's most recent /
+  // "used" order), matching the PDF output order.
+  const rows = [...groups.values()].sort((a, b) => {
+    const da = (ORDERS.get(pickLatestOid(a)) || {}).date || '';
+    const db = (ORDERS.get(pickLatestOid(b)) || {}).date || '';
+    return db.localeCompare(da);
+  });
   el.innerHTML = `
     <div class="note-box">
       📦 同じ購入者が複数回注文している場合、梱包は最新の注文IDにまとめます。注文ID列で <b>太字＋「使用」</b> が梱包に使うID、取り消し線＋「不使用」が統合されて使わないIDです。PDF出力では購入日時が新しい順に並び替わります。
@@ -1336,6 +1347,244 @@ function printShippingList() {
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
   printWithFilename('購入者別発送まとめ', 'landscape');
+}
+
+// ---------------------------------------------------------------------
+// 納品書PDF処理 (invoice PDF consolidation)
+//
+// BASE's invoice PDF export is one order per page, using a fixed template.
+// We locate each page's 注文ID from the text near the top of the page, then
+// cross-reference against the "used" order ID per purchaser (the newest
+// order — the same logic as the shipping tab's packaging consolidation).
+// Only "used" pages are kept, redacted, reordered newest-first, and merged
+// into a single output PDF.
+//
+// The redaction rectangle coordinates below were measured directly from a
+// real sample invoice PDF and verified consistent across all of its pages
+// (fixed-height template), covering the postal code, address, phone number,
+// and email lines, while leaving the recipient's name visible (so the
+// printed sheet can still be matched to the right package). If a future
+// BASE export uses a different template, these coordinates may need
+// adjusting — always check a couple of output pages before using them for
+// shipping.
+const INVOICE_REDACT_BOX = { x: 0, topDownTop: 176, topDownBottom: 242, width: 205 };
+
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+function renderInvoiceTab() {
+  const el = document.getElementById('tab-invoice');
+  el.innerHTML = `
+    <div class="note-box">
+      📄 BASEからダウンロードした納品書PDF（1注文＝1ページの形式）をアップロードすると、CSVから計算した「梱包に使う注文ID（購入者ごとに最新の1件）」だけを抜き出し、購入日時が新しい順に並べ替えて1つのPDFにまとめます。お届け先の郵便番号・住所・電話番号・メールアドレスは、ページを画像化したうえで塗りつぶすことで完全に消去します（コピー&ペーストや文字検索でも復元できません）。氏名のみ残ります。<br>
+      ⚠ 塗りつぶす位置はサンプルPDFのレイアウトから計算した固定位置です。出力後、1〜2ページは実際に住所が隠れているか目視で確認してください。画像化する都合上、出力後のPDFは文字のコピー・検索はできなくなります（印刷用途を想定しています）。
+    </div>
+    <div class="panel" style="margin-bottom:16px;">
+      <h2><span class="num">1</span>納品書PDFを選択</h2>
+      <div class="input-row">
+        <label class="file-btn">
+          📂 納品書PDFを選択
+          <input type="file" id="invoiceFileInput" accept=".pdf">
+        </label>
+        <span class="file-name" id="invoiceFileName">未選択</span>
+      </div>
+      <div class="err" id="invoiceErrBox"></div>
+    </div>
+    <div id="invoiceResults" style="display:none;">
+      <div class="cards" id="invoiceSummaryCards"></div>
+      <div class="toolbar">
+        <button class="dl-btn pdf" id="invoiceDownloadBtn" onclick="downloadProcessedInvoicePdf()">まとめたPDFをダウンロード</button>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>No.</th><th>注文ID</th><th>購入者名</th><th>購入日時</th><th>状態</th></tr></thead>
+        <tbody id="invoicePreviewBody"></tbody>
+      </table></div>
+    </div>
+  `;
+  document.getElementById('invoiceFileInput').addEventListener('change', handleInvoicePdfUpload);
+}
+
+async function handleInvoicePdfUpload(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  document.getElementById('invoiceFileName').textContent = f.name;
+  const errBox = document.getElementById('invoiceErrBox');
+  errBox.style.display = 'none';
+  document.getElementById('invoiceResults').style.display = 'none';
+
+  if (!ORDERS || ORDERS.size === 0) {
+    errBox.style.display = 'block';
+    errBox.textContent = '先にCSVを読み込んでから、納品書PDFをアップロードしてください。';
+    return;
+  }
+  if (typeof pdfjsLib === 'undefined' || typeof PDFLib === 'undefined') {
+    errBox.style.display = 'block';
+    errBox.textContent = 'PDF処理ライブラリの読み込みに失敗しました。ネットワーク接続を確認し、ページを再読み込みしてください。';
+    return;
+  }
+
+  try {
+    const buf = await f.arrayBuffer();
+    window._invoicePdfBytes = buf.slice(0);
+    const pageOrderIds = await extractOrderIdsFromPdf(buf.slice(0));
+    buildInvoicePreview(pageOrderIds);
+  } catch (err) {
+    errBox.style.display = 'block';
+    errBox.textContent = 'PDFの読み込みに失敗しました: ' + err.message;
+  }
+}
+
+async function extractOrderIdsFromPdf(buf) {
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const results = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const viewport = page.getViewport({ scale: 1 });
+    let topText = '';
+    for (const item of content.items) {
+      const y = item.transform[5];
+      if (y > viewport.height - 50) topText += item.str;
+    }
+    const m = topText.match(/([0-9A-Fa-f]{16})/);
+    results.push({ pageIndex: i - 1, orderId: m ? m[1].toUpperCase() : null, pageHeight: viewport.height, pageWidth: viewport.width });
+  }
+  return results;
+}
+
+function buildInvoicePreview(pageOrderIds) {
+  window._invoicePages = pageOrderIds;
+
+  const usedOids = new Set();
+  for (const g of (window._shipRows || [])) {
+    const used = pickLatestOid(g);
+    if (used) usedOids.add(used);
+  }
+
+  const kept = [];
+  const notUsed = [];
+  const problems = [];
+
+  for (const p of pageOrderIds) {
+    if (!p.orderId) {
+      problems.push({ pageIndex: p.pageIndex, orderId: null, reason: 'このページから注文IDを読み取れませんでした' });
+      continue;
+    }
+    const order = ORDERS.get(p.orderId);
+    if (!order) {
+      problems.push({ pageIndex: p.pageIndex, orderId: p.orderId, reason: 'CSVにこの注文IDが見つかりません' });
+      continue;
+    }
+    if (usedOids.has(p.orderId)) kept.push({ ...p, order });
+    else notUsed.push({ ...p, order });
+  }
+  kept.sort((a, b) => (b.order.date || '').localeCompare(a.order.date || ''));
+
+  const foundOids = new Set(pageOrderIds.filter(p => p.orderId).map(p => p.orderId));
+  const missingUsed = [...usedOids].filter(oid => !foundOids.has(oid)).map(oid => ORDERS.get(oid));
+
+  window._invoiceKept = kept;
+  window._invoiceNotUsed = notUsed;
+  window._invoiceProblems = problems;
+  window._invoiceMissingUsed = missingUsed;
+
+  document.getElementById('invoiceResults').style.display = 'block';
+  document.getElementById('invoiceSummaryCards').innerHTML = `
+    <div class="card"><div class="label">PDF内ページ数</div><div class="value">${pageOrderIds.length}</div></div>
+    <div class="card c-pink"><div class="label">出力対象（使用）ページ</div><div class="value">${kept.length}</div></div>
+    <div class="card cancel"><div class="label">統合により除外</div><div class="value">${notUsed.length}</div></div>
+    ${(problems.length + missingUsed.length) > 0 ? `<div class="card warn"><div class="label">⚠ 要確認</div><div class="value">${problems.length + missingUsed.length}</div></div>` : ''}
+  `;
+
+  let rows = '';
+  kept.forEach((p, idx) => {
+    rows += `<tr>
+      <td>${idx + 1}</td><td>${escapeHtml(p.orderId)}</td><td>${escapeHtml(p.order.billName)}</td>
+      <td>${escapeHtml(formatDateTime(p.order.date))}</td><td><span class="badge paid-manual">使用（出力対象）</span></td>
+    </tr>`;
+  });
+  notUsed.forEach(p => {
+    rows += `<tr class="cancelled">
+      <td></td><td>${escapeHtml(p.orderId)}</td><td>${escapeHtml(p.order.billName)}</td>
+      <td>${escapeHtml(formatDateTime(p.order.date))}</td><td><span class="badge cancelled">不使用（統合済み・除外）</span></td>
+    </tr>`;
+  });
+  problems.forEach(p => {
+    rows += `<tr class="unpaid">
+      <td></td><td>${escapeHtml(p.orderId || '(不明)')}</td><td>-</td><td>-</td>
+      <td><span class="badge unpaid-strong">要確認: ${escapeHtml(p.reason)}</span></td>
+    </tr>`;
+  });
+  missingUsed.forEach(o => {
+    rows += `<tr class="unpaid">
+      <td></td><td>${escapeHtml(o.oid)}</td><td>${escapeHtml(o.billName)}</td><td>${escapeHtml(formatDateTime(o.date))}</td>
+      <td><span class="badge unpaid-strong">要確認: 使用するはずのIDがPDF内に見つかりません</span></td>
+    </tr>`;
+  });
+  document.getElementById('invoicePreviewBody').innerHTML = rows || '<tr><td colspan="5" class="empty-note">対象データがありません</td></tr>';
+}
+
+async function renderPageToRedactedPng(pdfjsDoc, pageIndex, scale) {
+  const page = await pdfjsDoc.getPage(pageIndex + 1);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // Paint white directly onto the rendered pixels — this is true redaction
+  // (the address is gone from the image data itself), unlike drawing a
+  // separate rectangle object on top of the original vector text, which can
+  // still be copy-pasted or extracted from underneath.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(
+    INVOICE_REDACT_BOX.x * scale,
+    INVOICE_REDACT_BOX.topDownTop * scale,
+    INVOICE_REDACT_BOX.width * scale,
+    (INVOICE_REDACT_BOX.topDownBottom - INVOICE_REDACT_BOX.topDownTop) * scale
+  );
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  const pngBytes = await blob.arrayBuffer();
+  const viewport1 = page.getViewport({ scale: 1 });
+  return { pngBytes, widthPt: viewport1.width, heightPt: viewport1.height };
+}
+
+async function downloadProcessedInvoicePdf() {
+  if (!window._invoicePdfBytes || !window._invoiceKept || !window._invoiceKept.length) {
+    alert('出力対象のページがありません。先にPDFを読み込んで内容を確認してください。');
+    return;
+  }
+  const btn = document.getElementById('invoiceDownloadBtn');
+  const originalLabel = btn.textContent;
+  btn.textContent = `作成中…（${window._invoiceKept.length}ページ処理中、少々お待ちください）`;
+  btn.disabled = true;
+  try {
+    const { PDFDocument } = PDFLib;
+    const pdfjsDoc = await pdfjsLib.getDocument({ data: window._invoicePdfBytes.slice(0) }).promise;
+    const outDoc = await PDFDocument.create();
+    for (const p of window._invoiceKept) {
+      const { pngBytes, widthPt, heightPt } = await renderPageToRedactedPng(pdfjsDoc, p.pageIndex, 2);
+      const pngImage = await outDoc.embedPng(pngBytes);
+      const page = outDoc.addPage([widthPt, heightPt]);
+      page.drawImage(pngImage, { x: 0, y: 0, width: widthPt, height: heightPt });
+    }
+    const bytes = await outDoc.save();
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `納品書_まとめ_${outputTimestamp()}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('PDFの作成に失敗しました: ' + err.message);
+  } finally {
+    btn.textContent = originalLabel;
+    btn.disabled = false;
+  }
 }
 
 function renderAllTab() {
