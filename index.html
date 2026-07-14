@@ -1377,7 +1377,7 @@ function renderInvoiceTab() {
   const el = document.getElementById('tab-invoice');
   el.innerHTML = `
     <div class="note-box">
-      📄 BASEからダウンロードした納品書PDF（1注文＝1ページの形式）をアップロードすると、CSVから計算した「梱包に使う注文ID（購入者ごとに最新の1件）」だけを抜き出し、購入日時が新しい順に並べ替えて1つのPDFにまとめます。お届け先の郵便番号・住所・電話番号・メールアドレスは、ページを画像化したうえで塗りつぶすことで完全に消去します（コピー&ペーストや文字検索でも復元できません）。氏名のみ残ります。<br>
+      📄 BASEからダウンロードした納品書PDF（1注文＝1ページの形式）をアップロードすると、CSVの情報をもとに<b>同じ購入者のページを連番にまとめて</b>1つのPDFを作成します。購入者の並び順は、その人の最新の購入日時が新しい順です（同じ購入者内では、最新の注文を先頭にページが続きます）。キャンセル済みの注文のページは除外されます。お届け先の郵便番号・住所・電話番号・メールアドレスは、ページを画像化したうえで塗りつぶすことで完全に消去します（コピー&ペーストや文字検索でも復元できません）。氏名のみ残ります。<br>
       ⚠ 塗りつぶす位置はサンプルPDFのレイアウトから計算した固定位置です。出力後、1〜2ページは実際に住所が隠れているか目視で確認してください。画像化する都合上、出力後のPDFは文字のコピー・検索はできなくなります（印刷用途を想定しています）。
     </div>
     <div class="panel" style="margin-bottom:16px;">
@@ -1456,14 +1456,7 @@ async function extractOrderIdsFromPdf(buf) {
 function buildInvoicePreview(pageOrderIds) {
   window._invoicePages = pageOrderIds;
 
-  const usedOids = new Set();
-  for (const g of (window._shipRows || [])) {
-    const used = pickLatestOid(g);
-    if (used) usedOids.add(used);
-  }
-
-  const kept = [];
-  const notUsed = [];
+  const byPurchaser = new Map(); // purchaserKey -> { name, pages: [...] }
   const problems = [];
 
   for (const p of pageOrderIds) {
@@ -1476,38 +1469,58 @@ function buildInvoicePreview(pageOrderIds) {
       problems.push({ pageIndex: p.pageIndex, orderId: p.orderId, reason: 'CSVにこの注文IDが見つかりません' });
       continue;
     }
-    if (usedOids.has(p.orderId)) kept.push({ ...p, order });
-    else notUsed.push({ ...p, order });
+    if (order.cancelled) {
+      problems.push({ pageIndex: p.pageIndex, orderId: p.orderId, reason: 'キャンセル済みの注文のため除外' });
+      continue;
+    }
+    const key = purchaserKey(order);
+    if (!byPurchaser.has(key)) byPurchaser.set(key, { name: order.billName, pages: [] });
+    byPurchaser.get(key).pages.push({ ...p, order });
   }
-  kept.sort((a, b) => (b.order.date || '').localeCompare(a.order.date || ''));
 
+  // Same purchaser's pages print consecutively, newest order first within the group.
+  for (const g of byPurchaser.values()) {
+    g.pages.sort((a, b) => (b.order.date || '').localeCompare(a.order.date || ''));
+  }
+  // Groups themselves are ordered by that purchaser's most recent purchase — same
+  // "newest purchase first" ordering used in the shipping summary.
+  const groups = [...byPurchaser.values()].sort((a, b) => (b.pages[0].order.date || '').localeCompare(a.pages[0].order.date || ''));
+
+  const kept = [];
+  for (const g of groups) {
+    g.pages.forEach((p, idx) => kept.push({ ...p, isPrimary: idx === 0, groupSize: g.pages.length }));
+  }
+
+  // Flag purchasers whose most-recent order has no matching page anywhere in this PDF.
   const foundOids = new Set(pageOrderIds.filter(p => p.orderId).map(p => p.orderId));
-  const missingUsed = [...usedOids].filter(oid => !foundOids.has(oid)).map(oid => ORDERS.get(oid));
+  const missingPrimary = [];
+  for (const g of (window._shipRows || [])) {
+    if (g.anyCancelled && g.oids.every(oid => (ORDERS.get(oid) || {}).cancelled)) continue;
+    const latest = pickLatestOid(g);
+    const order = latest ? ORDERS.get(latest) : null;
+    if (order && !order.cancelled && !foundOids.has(latest)) missingPrimary.push(order);
+  }
 
   window._invoiceKept = kept;
-  window._invoiceNotUsed = notUsed;
   window._invoiceProblems = problems;
-  window._invoiceMissingUsed = missingUsed;
+  window._invoiceMissingPrimary = missingPrimary;
 
   document.getElementById('invoiceResults').style.display = 'block';
   document.getElementById('invoiceSummaryCards').innerHTML = `
     <div class="card"><div class="label">PDF内ページ数</div><div class="value">${pageOrderIds.length}</div></div>
-    <div class="card c-pink"><div class="label">出力対象（使用）ページ</div><div class="value">${kept.length}</div></div>
-    <div class="card cancel"><div class="label">統合により除外</div><div class="value">${notUsed.length}</div></div>
-    ${(problems.length + missingUsed.length) > 0 ? `<div class="card warn"><div class="label">⚠ 要確認</div><div class="value">${problems.length + missingUsed.length}</div></div>` : ''}
+    <div class="card c-pink"><div class="label">出力ページ数</div><div class="value">${kept.length}</div></div>
+    <div class="card c-gold"><div class="label">購入者グループ数</div><div class="value">${groups.length}</div></div>
+    ${(problems.length + missingPrimary.length) > 0 ? `<div class="card warn"><div class="label">⚠ 要確認</div><div class="value">${problems.length + missingPrimary.length}</div></div>` : ''}
   `;
 
   let rows = '';
   kept.forEach((p, idx) => {
+    const statusBadge = p.groupSize > 1
+      ? (p.isPrimary ? '<span class="badge paid-manual">最新（グループ代表）</span>' : '<span class="badge">同梱（同一購入者・過去分）</span>')
+      : '<span class="badge paid-manual">出力対象</span>';
     rows += `<tr>
       <td>${idx + 1}</td><td>${escapeHtml(p.orderId)}</td><td>${escapeHtml(p.order.billName)}</td>
-      <td>${escapeHtml(formatDateTime(p.order.date))}</td><td><span class="badge paid-manual">使用（出力対象）</span></td>
-    </tr>`;
-  });
-  notUsed.forEach(p => {
-    rows += `<tr class="cancelled">
-      <td></td><td>${escapeHtml(p.orderId)}</td><td>${escapeHtml(p.order.billName)}</td>
-      <td>${escapeHtml(formatDateTime(p.order.date))}</td><td><span class="badge cancelled">不使用（統合済み・除外）</span></td>
+      <td>${escapeHtml(formatDateTime(p.order.date))}</td><td>${statusBadge}</td>
     </tr>`;
   });
   problems.forEach(p => {
@@ -1516,10 +1529,10 @@ function buildInvoicePreview(pageOrderIds) {
       <td><span class="badge unpaid-strong">要確認: ${escapeHtml(p.reason)}</span></td>
     </tr>`;
   });
-  missingUsed.forEach(o => {
+  missingPrimary.forEach(o => {
     rows += `<tr class="unpaid">
       <td></td><td>${escapeHtml(o.oid)}</td><td>${escapeHtml(o.billName)}</td><td>${escapeHtml(formatDateTime(o.date))}</td>
-      <td><span class="badge unpaid-strong">要確認: 使用するはずのIDがPDF内に見つかりません</span></td>
+      <td><span class="badge unpaid-strong">要確認: 最新の注文IDがPDF内に見つかりません</span></td>
     </tr>`;
   });
   document.getElementById('invoicePreviewBody').innerHTML = rows || '<tr><td colspan="5" class="empty-note">対象データがありません</td></tr>';
