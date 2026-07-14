@@ -1191,6 +1191,9 @@ function renderShippingTab() {
 
   const rows = [...groups.values()].sort((a, b) => b.totalQty - a.totalQty);
   el.innerHTML = `
+    <div class="note-box">
+      📦 同じ購入者が複数回注文している場合、梱包は最新の注文IDにまとめます。注文ID列で <b>太字＋「使用」</b> が梱包に使うID、取り消し線＋「不使用」が統合されて使わないIDです。PDF出力では購入日時が新しい順に並び替わります。
+    </div>
     <div class="toolbar">
       <input type="text" class="search-box" id="shipSearch" placeholder="購入者名・住所・ニックネームで検索">
       <label class="checkline"><input type="checkbox" id="excludeUnpaidShip"> 未入金・キャンセルの注文を除く</label>
@@ -1233,6 +1236,31 @@ function qtyBadge(g) {
   return out;
 }
 
+// When the same purchaser has multiple orders, packaging is consolidated
+// into a single shipment under their MOST RECENT order ID. This picks that
+// order ID out of a purchaser group's oids list.
+function pickLatestOid(g) {
+  let latest = null;
+  for (const oid of g.oids) {
+    const d = (ORDERS.get(oid) || {}).date || '';
+    if (latest === null || d > (ORDERS.get(latest).date || '')) latest = oid;
+  }
+  return latest;
+}
+
+function orderIdHtml(g) {
+  const usedOid = pickLatestOid(g);
+  return g.oids.map(oid => oid === usedOid
+    ? `<b>${escapeHtml(oid)}</b> <span class="badge paid-manual">使用</span>`
+    : `<span style="text-decoration:line-through;color:#999;">${escapeHtml(oid)}</span> <span class="badge cancelled">不使用</span>`
+  ).join('<br>');
+}
+
+function orderIdText(g) {
+  const usedOid = pickLatestOid(g);
+  return g.oids.map(oid => oid === usedOid ? `${oid}(使用)` : `${oid}(不使用)`).join(' / ');
+}
+
 function fillShippingTable(rows) {
   document.getElementById('shipTableBody').innerHTML = rows.map((g, idx) => {
     const memberList = breakdownHtml(g.members);
@@ -1248,7 +1276,7 @@ function fillShippingTable(rows) {
       <td>${memberList}</td>
       <td>${nicknamesHtml(g.nicknames)}</td>
       <td>${escapeHtml([...g.payMethods].join('、'))}</td>
-      <td>${escapeHtml(g.oids.join('、'))}</td>
+      <td>${orderIdHtml(g)}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="11" class="empty-note">対象データがありません</td></tr>';
 }
@@ -1261,7 +1289,7 @@ function downloadShippingCsv() {
     const row = [
       idx + 1, [...g.names].join(' / '), [...g.zips].join(' / '), [...g.addrs].join(' / '),
       [...g.phones].join(' / '), [...g.emails].join(' / '), g.totalQty, g.unpaidQty, g.cancelledQty, memberList,
-      nicknamesText(g.nicknames), [...g.payMethods].join('、'), g.oids.join('、'),
+      nicknamesText(g.nicknames), [...g.payMethods].join('、'), orderIdText(g),
     ];
     lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
   });
@@ -1275,12 +1303,18 @@ function downloadShippingCsv() {
 }
 
 function printShippingList() {
-  document.getElementById('printTitle').textContent = '購入者別 発送まとめ';
-  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　対象: ${window._shipRows.length}件`;
+  // Sort newest purchase first, based on each purchaser's most recent (used) order.
+  const sorted = [...window._shipRows].sort((a, b) => {
+    const da = (ORDERS.get(pickLatestOid(a)) || {}).date || '';
+    const db = (ORDERS.get(pickLatestOid(b)) || {}).date || '';
+    return db.localeCompare(da);
+  });
+  document.getElementById('printTitle').textContent = '購入者別 発送まとめ（購入日時が新しい順）';
+  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　対象: ${sorted.length}件　※同一購入者の複数注文は最新の注文IDに梱包を統合しています（太字＝使用するID）`;
   let tableHtml = `<table><thead><tr>
-    <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>合計枚数</th><th>内訳</th><th>ニックネーム</th>
+    <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>合計枚数</th><th>内訳</th><th>ニックネーム</th><th>注文ID</th>
   </tr></thead><tbody>`;
-  window._shipRows.forEach((g, idx) => {
+  sorted.forEach((g, idx) => {
     const memberList = breakdownHtml(g.members);
     let qtyText = `${g.totalQty}枚`;
     const flags = [];
@@ -1296,6 +1330,7 @@ function printShippingList() {
       <td>${qtyText}</td>
       <td>${memberList}</td>
       <td>${nicknamesHtml(g.nicknames)}</td>
+      <td>${orderIdHtml(g)}</td>
     </tr>`;
   });
   tableHtml += '</tbody></table>';
