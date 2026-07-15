@@ -766,19 +766,33 @@ function renderNormalTab(nicknameProductSet) {
 }
 
 // Benefit thresholds — adjust here if the campaign rules change.
-const CHEKI_BENEFIT_THRESHOLD = 7;
-const FLOWER_TIERS = [
-  { label: '5口以上', min: 5, max: Infinity },
-  { label: '3〜4口', min: 3, max: 4 },
-  { label: '1〜2口', min: 1, max: 2 },
-];
+// Defaults for the benefit calculation — adjustable from the UI settings
+// panel in the 特典管理 tab (see benefitSettingsPanelHtml / applyBenefitSettings).
+let BENEFIT_SETTINGS = {
+  chekiMode: 'member',   // 'member' = per member, 'total' = summed across all members
+  chekiThreshold: 7,
+  flowerMode: 'product', // 'product' = per product, 'total' = summed across all flower products
+  flowerTier2: 3,        // lower bound of the middle tier
+  flowerTier3: 5,        // lower bound of the top tier
+};
+
+function currentFlowerTiers() {
+  const t2 = Math.max(2, BENEFIT_SETTINGS.flowerTier2);
+  const t3 = Math.max(t2 + 1, BENEFIT_SETTINGS.flowerTier3);
+  return [
+    { label: `${t3}口以上`, min: t3, max: Infinity },
+    { label: `${t2}〜${t3 - 1}口`, min: t2, max: t3 - 1 },
+    { label: `1〜${t2 - 1}口`, min: 1, max: t2 - 1 },
+  ];
+}
 
 // Aggregates per purchaser (same identity logic as the shipping tab: email,
-// falling back to name+phone). Cheki is tracked PER MEMBER, since the benefit
-// rule requires 7+ of that specific member's cheki — buying 3 of member A and
-// 4 of member B does not qualify for either member's benefit. Flower-stand is
-// tracked per product (a product is generally already tied to one member by
-// its title). Cancelled orders are excluded. Nicknames used are collected too.
+// falling back to name+phone). Cheki is tracked PER MEMBER (buying 3 of
+// member A and 4 of member B does not automatically qualify for either
+// member's benefit — unless "総購入数" mode is selected, which sums across
+// members instead). Flower-stand is tracked per product (a product is
+// generally already tied to one member by its title). Cancelled orders are
+// excluded. Nicknames used are collected too.
 function buildBenefitData() {
   const groups = new Map();
   function getGroup(o) {
@@ -806,8 +820,6 @@ function buildBenefitData() {
   return [...groups.values()];
 }
 
-// Regroups per-purchaser data into per-member (cheki) / per-product (flower)
-// lists, which is what the UI actually needs to render.
 function buildChekiByMember(purchasers) {
   const byMember = new Map();
   for (const p of purchasers) {
@@ -818,6 +830,20 @@ function buildChekiByMember(purchasers) {
   }
   for (const arr of byMember.values()) arr.sort((a, b) => b.qty - a.qty);
   return byMember;
+}
+
+function buildChekiTotals(purchasers) {
+  const list = purchasers.map(p => {
+    let qty = 0;
+    const nicknames = new Set();
+    for (const data of p.chekiByMember.values()) {
+      qty += data.qty;
+      for (const n of data.nicknames) nicknames.add(n);
+    }
+    return { name: p.name, qty, nicknames: [...nicknames] };
+  }).filter(p => p.qty > 0);
+  list.sort((a, b) => b.qty - a.qty);
+  return list;
 }
 
 function buildFlowerByProduct(purchasers) {
@@ -832,69 +858,193 @@ function buildFlowerByProduct(purchasers) {
   return byProduct;
 }
 
-window._benefitShareData = {};
+function buildFlowerTotals(purchasers) {
+  const list = purchasers.map(p => {
+    let qty = 0;
+    const nicknames = new Set();
+    for (const data of p.flowerByProduct.values()) {
+      qty += data.qty;
+      for (const n of data.nicknames) nicknames.add(n);
+    }
+    return { name: p.name, qty, nicknames: [...nicknames] };
+  }).filter(p => p.qty > 0);
+  list.sort((a, b) => b.qty - a.qty);
+  return list;
+}
+
+window._benefitShareData = {}; // name-free rows, for "メンバーに共有する" copy/PDF
+window._benefitFullData = {};  // same blocks but with real names, for CSV export
+
+function benefitSettingsPanelHtml() {
+  const s = BENEFIT_SETTINGS;
+  return `
+    <div class="panel" style="margin-bottom:16px;">
+      <h2><span class="num">⚙</span>特典の集計条件</h2>
+      <div class="input-row" style="margin-bottom:12px;">
+        <span style="font-weight:700; font-size:13px; min-width:60px;">チェキ：</span>
+        <select id="chekiModeSelect">
+          <option value="member" ${s.chekiMode === 'member' ? 'selected' : ''}>メンバーごと</option>
+          <option value="total" ${s.chekiMode === 'total' ? 'selected' : ''}>総購入数（全メンバー合算）</option>
+        </select>
+        <span style="font-size:12.5px; color:var(--ink-soft);">必要枚数：</span>
+        <input type="number" id="chekiThresholdInput" value="${s.chekiThreshold}" min="1" style="width:70px; padding:6px 8px; border:1px solid var(--line); border-radius:6px;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">枚以上</span>
+      </div>
+      <div class="input-row" style="margin-bottom:12px;">
+        <span style="font-weight:700; font-size:13px; min-width:60px;">フラワー：</span>
+        <select id="flowerModeSelect">
+          <option value="product" ${s.flowerMode === 'product' ? 'selected' : ''}>商品ごと</option>
+          <option value="total" ${s.flowerMode === 'total' ? 'selected' : ''}>総購入数（全商品合算）</option>
+        </select>
+        <span style="font-size:12.5px; color:var(--ink-soft);">中段の下限：</span>
+        <input type="number" id="flowerTier2Input" value="${s.flowerTier2}" min="2" style="width:55px; padding:6px 8px; border:1px solid var(--line); border-radius:6px;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">口〜　上段の下限：</span>
+        <input type="number" id="flowerTier3Input" value="${s.flowerTier3}" min="3" style="width:55px; padding:6px 8px; border:1px solid var(--line); border-radius:6px;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">口〜</span>
+      </div>
+      <button class="dl-btn" onclick="applyBenefitSettings()">この条件で再計算</button>
+    </div>
+  `;
+}
+
+function applyBenefitSettings() {
+  BENEFIT_SETTINGS.chekiMode = document.getElementById('chekiModeSelect').value;
+  BENEFIT_SETTINGS.chekiThreshold = Math.max(1, parseInt(document.getElementById('chekiThresholdInput').value, 10) || 1);
+  BENEFIT_SETTINGS.flowerMode = document.getElementById('flowerModeSelect').value;
+  BENEFIT_SETTINGS.flowerTier2 = Math.max(2, parseInt(document.getElementById('flowerTier2Input').value, 10) || 2);
+  BENEFIT_SETTINGS.flowerTier3 = Math.max(BENEFIT_SETTINGS.flowerTier2 + 1, parseInt(document.getElementById('flowerTier3Input').value, 10) || (BENEFIT_SETTINGS.flowerTier2 + 1));
+  renderBenefitsTab();
+}
 
 function renderBenefitsTab() {
   const el = document.getElementById('tab-benefits');
   const purchasers = buildBenefitData();
-  const chekiByMember = buildChekiByMember(purchasers);
-  const flowerByProduct = buildFlowerByProduct(purchasers);
   window._benefitShareData = {};
+  window._benefitFullData = {};
 
+  let html = benefitSettingsPanelHtml();
+  html += BENEFIT_SETTINGS.chekiMode === 'member' ? buildChekiMemberBlocks(purchasers) : buildChekiTotalBlock(purchasers);
+  html += BENEFIT_SETTINGS.flowerMode === 'product' ? buildFlowerProductBlocks(purchasers) : buildFlowerTotalBlock(purchasers);
+
+  html += `
+    <div class="copy-fallback" id="benefitCopyFallback">
+      <p>自動コピーができない環境のようです。下のテキストを選択してコピーしてください。</p>
+      <textarea id="benefitCopyText" readonly></textarea>
+    </div>
+  `;
+  el.innerHTML = html;
+}
+
+function benefitBlockHtml(shareId, titleHtml, badgeHtml, totalLabel, headers, rowsHtml, emptyColspan) {
+  return `<div class="product-block">
+    <div class="product-head" onclick="toggleBlock('${shareId}')">
+      <div class="product-title">${titleHtml}${badgeHtml}</div>
+      <div class="product-total">${totalLabel}</div>
+    </div>
+    <div class="product-body open" id="pb-${shareId}">
+      <div class="toolbar">
+        <button class="dl-btn" onclick="copyBenefitShare('${shareId}')">コピー</button>
+        <button class="dl-btn pdf" onclick="printBenefitShare('${shareId}')">メンバーに共有する（PDF/印刷）</button>
+        <button class="dl-btn secondary" onclick="downloadBenefitCsv('${shareId}')">CSVで保存（本名あり）</button>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="${emptyColspan}" class="empty-note">対象データがありません</td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function buildChekiMemberBlocks(purchasers) {
+  const threshold = BENEFIT_SETTINGS.chekiThreshold;
+  const chekiByMember = buildChekiByMember(purchasers);
   const memberBlocks = [...chekiByMember.entries()].sort((a, b) => {
-    const qa = a[1].filter(p => p.qty >= CHEKI_BENEFIT_THRESHOLD).length;
-    const qb = b[1].filter(p => p.qty >= CHEKI_BENEFIT_THRESHOLD).length;
+    const qa = a[1].filter(p => p.qty >= threshold).length;
+    const qb = b[1].filter(p => p.qty >= threshold).length;
     return qb - qa;
   });
 
-  let html = `
-    <div class="note-box">
-      🎁 チェキは「同じ購入者がそのメンバーのチェキを${CHEKI_BENEFIT_THRESHOLD}枚以上」でそのメンバーの特典対象、スタンドフラワーは商品（メンバー）ごとに合計口数で「1〜2口」「3〜4口」「5口以上」の3段階、という前提で集計しています。キャンセル済みの注文は集計から除いています。基準を変えたい場合は教えてください。
-    </div>
-  `;
-
-  html += `<div class="share-title" style="margin:4px 0 10px;">🎫 オンラインチェキ特典（メンバーごと・${CHEKI_BENEFIT_THRESHOLD}枚以上）</div>`;
+  let html = `<div class="share-title" style="margin:4px 0 10px;">🎫 オンラインチェキ特典（メンバーごと・${threshold}枚以上）</div>`;
   for (const [member, list] of memberBlocks) {
-    const qualified = list.filter(p => p.qty >= CHEKI_BENEFIT_THRESHOLD);
+    const qualified = list.filter(p => p.qty >= threshold);
     const shareId = 'cheki-' + member;
     window._benefitShareData[shareId] = {
       title: `【${member}】チェキ特典 ニックネーム一覧`,
       headers: ['ニックネーム', '合計枚数', '特典'],
-      rows: list.map(p => [p.nicknames.join('/') || '(未記入)', p.qty + '枚', p.qty >= CHEKI_BENEFIT_THRESHOLD ? '対象' : `あと${CHEKI_BENEFIT_THRESHOLD - p.qty}枚`]),
+      rows: list.map(p => [p.nicknames.join('/') || '(未記入)', p.qty + '枚', p.qty >= threshold ? '対象' : `あと${threshold - p.qty}枚`]),
     };
-    html += `<div class="product-block">
-      <div class="product-head" onclick="toggleBlock('${shareId}')">
-        <div class="product-title">${memberColorSpan(member)}<span class="badge">対象 ${qualified.length}名</span></div>
-        <div class="product-total">購入者 ${list.length}名</div>
-      </div>
-      <div class="product-body open" id="pb-${shareId}">
-        <div class="toolbar">
-          <button class="dl-btn" onclick="copyBenefitShare('${shareId}')">コピー</button>
-          <button class="dl-btn pdf" onclick="printBenefitShare('${shareId}')">メンバーに共有する（PDF/印刷）</button>
-          <button class="dl-btn secondary" onclick="downloadBenefitCsv('${shareId}')">CSVで保存（本名あり）</button>
-        </div>
-        <div class="table-scroll"><table>
-          <thead><tr><th>No.</th><th>購入者名</th><th>ニックネーム</th><th>合計枚数</th><th>特典</th></tr></thead>
-          <tbody>
-            ${list.map((p, idx) => `<tr>
-              <td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}枚</td>
-              <td>${p.qty >= CHEKI_BENEFIT_THRESHOLD ? '<span class="badge paid-manual">🎁対象</span>' : `あと${CHEKI_BENEFIT_THRESHOLD - p.qty}枚`}</td>
-            </tr>`).join('') || '<tr><td colspan="5" class="empty-note">対象データがありません</td></tr>'}
-          </tbody>
-        </table></div>
-      </div>
-    </div>`;
+    window._benefitFullData[shareId] = {
+      headers: ['購入者名', 'ニックネーム', '合計枚数', '特典'],
+      rows: list.map(p => [p.name, p.nicknames.join('/') || '', p.qty, p.qty >= threshold ? '対象' : '']),
+      filename: `${member}_チェキ特典.csv`,
+    };
+    const rowsHtml = list.map((p, idx) => `<tr>
+      <td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}枚</td>
+      <td>${p.qty >= threshold ? '<span class="badge paid-manual">🎁対象</span>' : `あと${threshold - p.qty}枚`}</td>
+    </tr>`).join('');
+    html += benefitBlockHtml(
+      shareId, memberColorSpan(member), `<span class="badge">対象 ${qualified.length}名</span>`,
+      `購入者 ${list.length}名`, ['No.', '購入者名', 'ニックネーム', '合計枚数', '特典'], rowsHtml, 5
+    );
   }
+  return html;
+}
 
-  html += `<div class="share-title" style="margin:20px 0 10px;">💐 スタンドフラワー特典（商品ごと・口数で3段階）</div>`;
+function buildChekiTotalBlock(purchasers) {
+  const threshold = BENEFIT_SETTINGS.chekiThreshold;
+  const list = buildChekiTotals(purchasers);
+  const qualified = list.filter(p => p.qty >= threshold);
+  const shareId = 'cheki-total';
+  window._benefitShareData[shareId] = {
+    title: `【全メンバー合算】チェキ特典 ニックネーム一覧`,
+    headers: ['ニックネーム', '合計枚数', '特典'],
+    rows: list.map(p => [p.nicknames.join('/') || '(未記入)', p.qty + '枚', p.qty >= threshold ? '対象' : `あと${threshold - p.qty}枚`]),
+  };
+  window._benefitFullData[shareId] = {
+    headers: ['購入者名', 'ニックネーム', '合計枚数', '特典'],
+    rows: list.map(p => [p.name, p.nicknames.join('/') || '', p.qty, p.qty >= threshold ? '対象' : '']),
+    filename: `全メンバー合算_チェキ特典.csv`,
+  };
+  const rowsHtml = list.map((p, idx) => `<tr>
+    <td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}枚</td>
+    <td>${p.qty >= threshold ? '<span class="badge paid-manual">🎁対象</span>' : `あと${threshold - p.qty}枚`}</td>
+  </tr>`).join('');
+  let html = `<div class="share-title" style="margin:4px 0 10px;">🎫 オンラインチェキ特典（総購入数・${threshold}枚以上）</div>`;
+  html += benefitBlockHtml(
+    shareId, '全メンバー合算', `<span class="badge">対象 ${qualified.length}名</span>`,
+    `購入者 ${list.length}名`, ['No.', '購入者名', 'ニックネーム', '合計枚数', '特典'], rowsHtml, 5
+  );
+  return html;
+}
+
+function buildFlowerProductBlocks(purchasers) {
+  const tiersDef = currentFlowerTiers();
+  const flowerByProduct = buildFlowerByProduct(purchasers);
+  let html = `<div class="share-title" style="margin:20px 0 10px;">💐 スタンドフラワー特典（商品ごと・口数で3段階）</div>`;
   for (const [product, list] of flowerByProduct) {
-    const tiers = FLOWER_TIERS.map(tier => ({ ...tier, people: list.filter(p => p.qty >= tier.min && p.qty <= tier.max) }));
+    const tiers = tiersDef.map(tier => ({ ...tier, people: list.filter(p => p.qty >= tier.min && p.qty <= tier.max) }));
     const shareId = 'flower-' + product;
     window._benefitShareData[shareId] = {
       title: `【${product}】特典段階 ニックネーム一覧`,
       headers: ['段階', 'ニックネーム', '合計口数'],
       rows: tiers.flatMap(tier => tier.people.map(p => [tier.label, p.nicknames.join('/') || '(未記入)', p.qty + '口'])),
     };
+    window._benefitFullData[shareId] = {
+      headers: ['段階', '購入者名', 'ニックネーム', '合計口数'],
+      rows: tiers.flatMap(tier => tier.people.map(p => [tier.label, p.name, p.nicknames.join('/') || '', p.qty])),
+      filename: `${product}_特典段階.csv`,
+    };
+    const bodyHtml = tiers.map(tier => `
+      <div style="margin-bottom:14px;">
+        <div class="member-row" style="border-top:none;"><span class="member-name">${escapeHtml(tier.label)}</span><span class="member-count">${tier.people.length}名</span></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>No.</th><th>購入者名</th><th>ニックネーム</th><th>合計口数</th></tr></thead>
+          <tbody>
+            ${tier.people.map((p, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}口</td></tr>`).join('') || '<tr><td colspan="4" class="empty-note">対象者なし</td></tr>'}
+          </tbody>
+        </table></div>
+      </div>
+    `).join('');
     html += `<div class="product-block">
       <div class="product-head" onclick="toggleBlock('${shareId}')">
         <div class="product-title">${escapeHtml(product)}</div>
@@ -906,28 +1056,55 @@ function renderBenefitsTab() {
           <button class="dl-btn pdf" onclick="printBenefitShare('${shareId}')">メンバーに共有する（PDF/印刷）</button>
           <button class="dl-btn secondary" onclick="downloadBenefitCsv('${shareId}')">CSVで保存（本名あり）</button>
         </div>
-        ${tiers.map(tier => `
-          <div style="margin-bottom:14px;">
-            <div class="member-row" style="border-top:none;"><span class="member-name">${escapeHtml(tier.label)}</span><span class="member-count">${tier.people.length}名</span></div>
-            <div class="table-scroll"><table>
-              <thead><tr><th>No.</th><th>購入者名</th><th>ニックネーム</th><th>合計口数</th></tr></thead>
-              <tbody>
-                ${tier.people.map((p, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}口</td></tr>`).join('') || '<tr><td colspan="4" class="empty-note">対象者なし</td></tr>'}
-              </tbody>
-            </table></div>
-          </div>
-        `).join('')}
+        ${bodyHtml}
       </div>
     </div>`;
   }
+  return html;
+}
 
-  html += `
-    <div class="copy-fallback" id="benefitCopyFallback">
-      <p>自動コピーができない環境のようです。下のテキストを選択してコピーしてください。</p>
-      <textarea id="benefitCopyText" readonly></textarea>
+function buildFlowerTotalBlock(purchasers) {
+  const tiersDef = currentFlowerTiers();
+  const list = buildFlowerTotals(purchasers);
+  const tiers = tiersDef.map(tier => ({ ...tier, people: list.filter(p => p.qty >= tier.min && p.qty <= tier.max) }));
+  const shareId = 'flower-total';
+  window._benefitShareData[shareId] = {
+    title: `【全商品合算】特典段階 ニックネーム一覧`,
+    headers: ['段階', 'ニックネーム', '合計口数'],
+    rows: tiers.flatMap(tier => tier.people.map(p => [tier.label, p.nicknames.join('/') || '(未記入)', p.qty + '口'])),
+  };
+  window._benefitFullData[shareId] = {
+    headers: ['段階', '購入者名', 'ニックネーム', '合計口数'],
+    rows: tiers.flatMap(tier => tier.people.map(p => [tier.label, p.name, p.nicknames.join('/') || '', p.qty])),
+    filename: `全商品合算_特典段階.csv`,
+  };
+  const bodyHtml = tiers.map(tier => `
+    <div style="margin-bottom:14px;">
+      <div class="member-row" style="border-top:none;"><span class="member-name">${escapeHtml(tier.label)}</span><span class="member-count">${tier.people.length}名</span></div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>No.</th><th>購入者名</th><th>ニックネーム</th><th>合計口数</th></tr></thead>
+        <tbody>
+          ${tier.people.map((p, idx) => `<tr><td>${idx + 1}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.nicknames.join('/') || '(未記入)')}</td><td>${p.qty}口</td></tr>`).join('') || '<tr><td colspan="4" class="empty-note">対象者なし</td></tr>'}
+        </tbody>
+      </table></div>
     </div>
-  `;
-  el.innerHTML = html;
+  `).join('');
+  let html = `<div class="share-title" style="margin:20px 0 10px;">💐 スタンドフラワー特典（総購入数・全商品合算）</div>`;
+  html += `<div class="product-block">
+    <div class="product-head" onclick="toggleBlock('${shareId}')">
+      <div class="product-title">全商品合算</div>
+      <div class="product-total">購入者 ${list.length}名</div>
+    </div>
+    <div class="product-body open" id="pb-${shareId}">
+      <div class="toolbar">
+        <button class="dl-btn" onclick="copyBenefitShare('${shareId}')">コピー</button>
+        <button class="dl-btn pdf" onclick="printBenefitShare('${shareId}')">メンバーに共有する（PDF/印刷）</button>
+        <button class="dl-btn secondary" onclick="downloadBenefitCsv('${shareId}')">CSVで保存（本名あり）</button>
+      </div>
+      ${bodyHtml}
+    </div>
+  </div>`;
+  return html;
 }
 
 async function copyBenefitShare(shareId) {
@@ -956,42 +1133,19 @@ function printBenefitShare(shareId) {
   for (const r of data.rows) tableHtml += `<tr>${r.map(c => `<td>${escapeHtml(String(c))}</td>`).join('')}</tr>`;
   tableHtml += '</tbody></table>';
   document.getElementById('printBody').innerHTML = tableHtml;
-  const label = shareId.startsWith('cheki-') ? shareId.slice('cheki-'.length) : shareId.slice('flower-'.length);
-  printWithFilename(label);
+  printWithFilename(shareId.replace(/^cheki-|^flower-/, ''));
 }
 
 function downloadBenefitCsv(shareId) {
-  const data = window._benefitShareData[shareId];
+  const data = window._benefitFullData[shareId];
   if (!data) return;
-  // CSV export intentionally keeps real names for internal fulfillment use —
-  // only the "メンバーに共有する" copy/PDF outputs are name-free.
-  const isChekiBlock = shareId.startsWith('cheki-');
-  const header = isChekiBlock ? ['購入者名', 'ニックネーム', '合計枚数', '特典'] : ['段階', '購入者名', 'ニックネーム', '合計口数'];
-  const lines = [header.join(',')];
-  // Re-derive rows with names by rebuilding from current benefit data.
-  const purchasers = buildBenefitData();
-  if (isChekiBlock) {
-    const member = shareId.slice('cheki-'.length);
-    const list = buildChekiByMember(purchasers).get(member) || [];
-    for (const p of list) {
-      const row = [p.name, p.nicknames.join('/') || '', p.qty, p.qty >= CHEKI_BENEFIT_THRESHOLD ? '対象' : ''];
-      lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
-    }
-  } else {
-    const product = shareId.slice('flower-'.length);
-    const list = buildFlowerByProduct(purchasers).get(product) || [];
-    for (const tier of FLOWER_TIERS) {
-      for (const p of list.filter(p => p.qty >= tier.min && p.qty <= tier.max)) {
-        const row = [tier.label, p.name, p.nicknames.join('/') || '', p.qty];
-        lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
-      }
-    }
-  }
+  const lines = [data.headers.join(',')];
+  for (const row of data.rows) lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
   const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${shareId}_特典対象.csv`;
+  a.download = data.filename;
   a.click();
   URL.revokeObjectURL(url);
 }
