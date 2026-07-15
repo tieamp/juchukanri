@@ -399,6 +399,8 @@ function parseAndRender(raw) {
     payMethod: findCol(headerRow, ['支払い方法']),
     payStatus: findCol(headerRow, ['入金']),
     shipStatus: findCol(headerRow, ['発送状況']),
+    shippingFee: findCol(headerRow, ['送料']),
+    note: findCol(headerRow, ['備考']),
     orderStatus: findCol(headerRow, ['注文ステータス']),
   };
   if (!col.orderId || !col.product) {
@@ -440,6 +442,8 @@ function parseAndRender(raw) {
       (col.orderStatus && (first[col.orderStatus] || '').includes('キャンセル')) || false;
     let amountSum = 0;
     for (const r of rows) amountSum += parseInt(r[col.amount], 10) || 0;
+    const shippingFee = col.shippingFee ? (parseInt(first[col.shippingFee], 10) || 0) : 0;
+    const note = col.note ? (first[col.note] || '').trim() : '';
 
     ORDERS.set(oid, {
       oid, date, billName, shipName, email,
@@ -448,7 +452,7 @@ function parseAndRender(raw) {
       addr1: col.addr1 ? (first[col.addr1] || '') : '',
       addr2: col.addr2 ? (first[col.addr2] || '') : '',
       phone: col.phone ? (first[col.phone] || '') : '',
-      payMethod, heuristicUnpaid, cancelled, amountSum,
+      payMethod, heuristicUnpaid, cancelled, amountSum, shippingFee, note,
       manualPaid: prevManual.has(oid) ? prevManual.get(oid) : null,
     });
 
@@ -1164,7 +1168,7 @@ function renderShippingTab() {
     if (!groups.has(key)) {
       groups.set(key, {
         names: new Set(), emails: new Set(), zips: new Set(), addrs: new Set(), phones: new Set(),
-        payMethods: new Set(), nicknames: new Set(), members: new Map(), oids: [], totalQty: 0,
+        payMethods: new Set(), nicknames: new Set(), notes: new Set(), members: new Map(), oids: [], totalQty: 0,
         totalAmount: 0, unpaidQty: 0, cancelledQty: 0, anyUnpaid: false, anyCancelled: false,
       });
     }
@@ -1176,6 +1180,7 @@ function renderShippingTab() {
     if (addr.trim()) g.addrs.add(addr);
     if (o.phone) g.phones.add(o.phone);
     if (o.payMethod) g.payMethods.add(o.payMethod);
+    if (o.note) g.notes.add(o.note);
     g.oids.push(o.oid);
     g.totalAmount += o.amountSum;
     if (effectiveUnpaid(o)) g.anyUnpaid = true;
@@ -1194,16 +1199,12 @@ function renderShippingTab() {
     g.members.set(mkey, (g.members.get(mkey) || 0) + i.qty);
   }
 
-  // Sorted newest-purchase-first (based on each purchaser's most recent /
-  // "used" order), matching the PDF output order.
-  const rows = [...groups.values()].sort((a, b) => {
-    const da = (ORDERS.get(pickLatestOid(a)) || {}).date || '';
-    const db = (ORDERS.get(pickLatestOid(b)) || {}).date || '';
-    return db.localeCompare(da);
-  });
+  // Sorted newest-purchase-first (based on each purchaser's actual most
+  // recent order), matching the PDF output order.
+  const rows = [...groups.values()].sort((a, b) => latestOrderDate(b).localeCompare(latestOrderDate(a)));
   el.innerHTML = `
     <div class="note-box">
-      📦 同じ購入者が複数回注文している場合、梱包は最新の注文IDにまとめます。注文ID列で <b>太字＋「使用」</b> が梱包に使うID、取り消し線＋「不使用」が統合されて使わないIDです。PDF出力では購入日時が新しい順に並び替わります。
+      📦 同じ購入者が複数回注文している場合、梱包は<b>送料が一番高い注文ID</b>にまとめます（送料が全て同額の場合は最新の注文IDにまとめます）。注文ID列で <b>太字＋「使用」</b> が梱包に使うID、取り消し線＋「不使用」が統合されて使わないIDです。一覧・PDF出力とも、購入者は実際の購入日時が新しい順に並びます。
     </div>
     <div class="toolbar">
       <input type="text" class="search-box" id="shipSearch" placeholder="購入者名・住所・ニックネームで検索">
@@ -1214,7 +1215,7 @@ function renderShippingTab() {
     <div class="table-scroll"><table>
       <thead><tr>
         <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>メール</th>
-        <th>合計枚数</th><th>商品・メンバー内訳</th><th>ニックネーム</th><th>支払い方法</th><th>注文ID</th>
+        <th>合計枚数</th><th>商品・メンバー内訳</th><th>ニックネーム</th><th>購入者からの要望</th><th>支払い方法</th><th>注文ID</th>
       </tr></thead>
       <tbody id="shipTableBody"></tbody>
     </table></div>
@@ -1250,17 +1251,39 @@ function qtyBadge(g) {
 // When the same purchaser has multiple orders, packaging is consolidated
 // into a single shipment under their MOST RECENT order ID. This picks that
 // order ID out of a purchaser group's oids list.
-function pickLatestOid(g) {
-  let latest = null;
+// When the same purchaser has multiple orders, packaging is consolidated
+// into a single shipment under ONE order ID: the order with the highest
+// shipping fee (送料). If all of the purchaser's orders have the same
+// shipping fee, the most recent order is used instead.
+function pickPrimaryOid(g) {
+  let chosen = null;
+  for (const oid of g.oids) {
+    const o = ORDERS.get(oid) || {};
+    if (chosen === null) { chosen = oid; continue; }
+    const c = ORDERS.get(chosen);
+    const oFee = o.shippingFee || 0;
+    const cFee = c.shippingFee || 0;
+    if (oFee > cFee) chosen = oid;
+    else if (oFee === cFee && (o.date || '') > (c.date || '')) chosen = oid;
+  }
+  return chosen;
+}
+
+// The purchaser's actual most recent purchase date, independent of which
+// order was chosen as "primary" above — used for list/print ordering
+// ("newest purchase first"), which should reflect real purchase recency
+// even when a different (higher shipping fee) order is used for packaging.
+function latestOrderDate(g) {
+  let latest = '';
   for (const oid of g.oids) {
     const d = (ORDERS.get(oid) || {}).date || '';
-    if (latest === null || d > (ORDERS.get(latest).date || '')) latest = oid;
+    if (d > latest) latest = d;
   }
   return latest;
 }
 
 function orderIdHtml(g) {
-  const usedOid = pickLatestOid(g);
+  const usedOid = pickPrimaryOid(g);
   return g.oids.map(oid => oid === usedOid
     ? `<b>${escapeHtml(oid)}</b> <span class="badge paid-manual">使用</span>`
     : `<span style="text-decoration:line-through;color:#999;">${escapeHtml(oid)}</span> <span class="badge cancelled">不使用</span>`
@@ -1268,7 +1291,7 @@ function orderIdHtml(g) {
 }
 
 function orderIdText(g) {
-  const usedOid = pickLatestOid(g);
+  const usedOid = pickPrimaryOid(g);
   return g.oids.map(oid => oid === usedOid ? `${oid}(使用)` : `${oid}(不使用)`).join(' / ');
 }
 
@@ -1286,21 +1309,22 @@ function fillShippingTable(rows) {
       <td>${qtyBadge(g)}</td>
       <td>${memberList}</td>
       <td>${nicknamesHtml(g.nicknames)}</td>
+      <td>${escapeHtml([...g.notes].join(' / '))}</td>
       <td>${escapeHtml([...g.payMethods].join('、'))}</td>
       <td>${orderIdHtml(g)}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="11" class="empty-note">対象データがありません</td></tr>';
+  }).join('') || '<tr><td colspan="12" class="empty-note">対象データがありません</td></tr>';
 }
 
 function downloadShippingCsv() {
-  const header = ['No.','購入者名','郵便番号','住所','電話番号','メール','合計枚数','うち未入金枚数','うちキャンセル枚数','商品・メンバー内訳','ニックネーム','支払い方法','注文ID'];
+  const header = ['No.','購入者名','郵便番号','住所','電話番号','メール','合計枚数','うち未入金枚数','うちキャンセル枚数','商品・メンバー内訳','ニックネーム','購入者からの要望','支払い方法','注文ID'];
   const lines = [header.join(',')];
   window._shipRows.forEach((g, idx) => {
     const memberList = breakdownText(g.members);
     const row = [
       idx + 1, [...g.names].join(' / '), [...g.zips].join(' / '), [...g.addrs].join(' / '),
       [...g.phones].join(' / '), [...g.emails].join(' / '), g.totalQty, g.unpaidQty, g.cancelledQty, memberList,
-      nicknamesText(g.nicknames), [...g.payMethods].join('、'), orderIdText(g),
+      nicknamesText(g.nicknames), [...g.notes].join(' / '), [...g.payMethods].join('、'), orderIdText(g),
     ];
     lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
   });
@@ -1314,16 +1338,12 @@ function downloadShippingCsv() {
 }
 
 function printShippingList() {
-  // Sort newest purchase first, based on each purchaser's most recent (used) order.
-  const sorted = [...window._shipRows].sort((a, b) => {
-    const da = (ORDERS.get(pickLatestOid(a)) || {}).date || '';
-    const db = (ORDERS.get(pickLatestOid(b)) || {}).date || '';
-    return db.localeCompare(da);
-  });
+  // Sort newest purchase first, based on each purchaser's actual most recent order.
+  const sorted = [...window._shipRows].sort((a, b) => latestOrderDate(b).localeCompare(latestOrderDate(a)));
   document.getElementById('printTitle').textContent = '購入者別 発送まとめ（購入日時が新しい順）';
-  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　対象: ${sorted.length}件　※同一購入者の複数注文は最新の注文IDに梱包を統合しています（太字＝使用するID）`;
+  document.getElementById('printMeta').textContent = `作成日: ${new Date().toLocaleDateString('ja-JP')}　対象: ${sorted.length}件　※同一購入者の複数注文は送料が一番高い注文ID（同額なら最新）に梱包を統合しています（太字＝使用するID）`;
   let tableHtml = `<table><thead><tr>
-    <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>合計枚数</th><th>内訳</th><th>ニックネーム</th><th>注文ID</th>
+    <th>No.</th><th>購入者名</th><th>郵便番号</th><th>住所</th><th>電話番号</th><th>合計枚数</th><th>内訳</th><th>ニックネーム</th><th>購入者からの要望</th><th>注文ID</th>
   </tr></thead><tbody>`;
   sorted.forEach((g, idx) => {
     const memberList = breakdownHtml(g.members);
@@ -1341,6 +1361,7 @@ function printShippingList() {
       <td>${qtyText}</td>
       <td>${memberList}</td>
       <td>${nicknamesHtml(g.nicknames)}</td>
+      <td>${escapeHtml([...g.notes].join(' / '))}</td>
       <td>${orderIdHtml(g)}</td>
     </tr>`;
   });
@@ -1496,7 +1517,7 @@ function buildInvoicePreview(pageOrderIds) {
   const missingPrimary = [];
   for (const g of (window._shipRows || [])) {
     if (g.anyCancelled && g.oids.every(oid => (ORDERS.get(oid) || {}).cancelled)) continue;
-    const latest = pickLatestOid(g);
+    const latest = pickPrimaryOid(g);
     const order = latest ? ORDERS.get(latest) : null;
     if (order && !order.cancelled && !foundOids.has(latest)) missingPrimary.push(order);
   }
@@ -1611,7 +1632,7 @@ function renderAllTab() {
     <div class="table-scroll"><table>
       <thead><tr>
         <th>注文ID</th><th>注文日時</th><th>購入者名</th><th>商品名</th><th>メンバー/バリエーション</th>
-        <th>数量</th><th>ニックネーム</th><th>支払い方法</th><th>状態</th><th></th>
+        <th>数量</th><th>ニックネーム</th><th>購入者からの要望</th><th>支払い方法</th><th>状態</th><th></th>
       </tr></thead>
       <tbody id="allTableBody"></tbody>
     </table></div>
@@ -1649,10 +1670,10 @@ function applyAllFilter() {
     return `<tr class="${rowClass}">
       <td>${escapeHtml(i.oid)}</td><td>${escapeHtml(o.date)}</td><td>${escapeHtml(o.billName)}</td>
       <td>${escapeHtml(i.product)}</td><td>${escapeHtml(i.member || i.variation)}</td>
-      <td>${i.qty}</td><td>${escapeHtml(i.nickname || '')}</td><td>${escapeHtml(o.payMethod)}</td>
+      <td>${i.qty}</td><td>${escapeHtml(i.nickname || '')}</td><td>${escapeHtml(o.note || '')}</td><td>${escapeHtml(o.payMethod)}</td>
       <td>${statusHtml}</td><td>${btn}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="10" class="empty-note">対象データがありません</td></tr>';
+  }).join('') || '<tr><td colspan="11" class="empty-note">対象データがありません</td></tr>';
 }
 
 function toggleBlock(idx) { document.getElementById(`pb-${idx}`).classList.toggle('open'); }
@@ -1663,7 +1684,7 @@ function escapeHtml(s) {
 }
 
 function downloadCsv() {
-  const header = ['注文ID','注文日時','購入者名','商品名','メンバー/バリエーション','数量','ニックネーム','支払い方法','状態'];
+  const header = ['注文ID','注文日時','購入者名','商品名','メンバー/バリエーション','数量','ニックネーム','購入者からの要望','支払い方法','状態'];
   const lines = [header.join(',')];
   for (const i of window._allFiltered || ITEMS) {
     const o = orderOf(i);
@@ -1671,7 +1692,7 @@ function downloadCsv() {
     if (o.cancelled) status = 'キャンセル';
     else if (o.manualPaid === true) status = '入金確認済み(手動)';
     else if (effectiveUnpaid(o)) status = '未入金?';
-    const row = [i.oid, o.date, o.billName, i.product, i.member || i.variation, i.qty, i.nickname || '', o.payMethod, status];
+    const row = [i.oid, o.date, o.billName, i.product, i.member || i.variation, i.qty, i.nickname || '', o.note || '', o.payMethod, status];
     lines.push(row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
   }
   const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
